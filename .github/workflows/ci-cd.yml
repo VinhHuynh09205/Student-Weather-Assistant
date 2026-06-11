@@ -1,0 +1,340 @@
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Deploy to AWS after CI checks"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+  AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY || 'student-weather-backend' }}
+  ECS_CONTAINER_NAME: ${{ vars.ECS_CONTAINER_NAME || 'backend' }}
+  VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL || 'http://localhost:18080' }}
+  VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID || '' }}
+
+jobs:
+  backend:
+    name: Backend lint and tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: student_weather
+          POSTGRES_USER: student_weather_user
+          POSTGRES_PASSWORD: secure_password_for_student_weather
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U student_weather_user -d student_weather"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://student_weather_user:secure_password_for_student_weather@localhost:5432/student_weather
+      JWT_SECRET_KEY: ci_jwt_secret_key_for_tests_only
+      JWT_ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: "60"
+      WEATHER_PROVIDER: open_meteo
+      WEATHER_FALLBACK_PROVIDER: ""
+      CORS_ORIGINS: '["http://localhost:15173","http://localhost:5173","http://localhost:3000"]'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt "ruff>=0.5.0"
+
+      - name: Lint backend
+        run: ruff check app tests alembic
+
+      - name: Run database migrations
+        run: alembic upgrade head
+
+      - name: Run backend tests
+        run: pytest
+
+  frontend:
+    name: Frontend lint and build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Lint frontend
+        run: npm run lint
+
+      - name: Build frontend
+        run: npm run build
+
+  docker:
+    name: Docker image build
+    runs-on: ubuntu-latest
+    needs:
+      - backend
+      - frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: docker build -f Dockerfile.backend -t student-weather-backend:ci .
+
+      - name: Build frontend image
+        run: |
+          docker build \
+            -f Dockerfile.frontend \
+            --build-arg VITE_API_BASE_URL="${VITE_API_BASE_URL}" \
+            --build-arg VITE_GOOGLE_CLIENT_ID="${VITE_GOOGLE_CLIENT_ID}" \
+            -t student-weather-frontend:ci .
+
+  deploy-backend:
+    name: Deploy backend to AWS ECS
+    runs-on: ubuntu-latest
+    needs:
+      - backend
+      - frontend
+      - docker
+    environment: production
+    if: >-
+      vars.AWS_DEPLOY_ENABLED == 'true' &&
+      (
+        (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+        (github.event_name == 'workflow_dispatch' && inputs.deploy == true)
+      )
+    env:
+      ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+      ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+      ECS_TASK_DEFINITION: ${{ vars.ECS_TASK_DEFINITION }}
+      ECS_SUBNETS: ${{ vars.ECS_SUBNETS }}
+      ECS_SECURITY_GROUPS: ${{ vars.ECS_SECURITY_GROUPS }}
+      ECS_ASSIGN_PUBLIC_IP: ${{ vars.ECS_ASSIGN_PUBLIC_IP || 'DISABLED' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate backend deployment config
+        run: |
+          missing=0
+          for name in AWS_REGION ECR_REPOSITORY ECS_CLUSTER ECS_SERVICE ECS_TASK_DEFINITION ECS_CONTAINER_NAME; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing required GitHub variable: $name"
+              missing=1
+            fi
+          done
+          if [ -z "${AWS_ROLE_TO_ASSUME}" ]; then
+            echo "::error::Missing required GitHub secret: AWS_ROLE_TO_ASSUME"
+            missing=1
+          fi
+          exit "$missing"
+        env:
+          AWS_ROLE_TO_ASSUME: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push backend image
+        id: backend-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          image="${ECR_REGISTRY}/${ECR_REPOSITORY}:${GITHUB_SHA}"
+          latest="${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
+          docker build -f Dockerfile.backend -t "$image" -t "$latest" .
+          docker push "$image"
+          docker push "$latest"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      - name: Register new ECS task definition
+        id: task-definition
+        env:
+          BACKEND_IMAGE: ${{ steps.backend-image.outputs.image }}
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "$ECS_TASK_DEFINITION" \
+            --query taskDefinition \
+            > task-definition.json
+
+          jq 'del(
+            .taskDefinitionArn,
+            .revision,
+            .status,
+            .requiresAttributes,
+            .compatibilities,
+            .registeredAt,
+            .registeredBy
+          )' task-definition.json > task-definition-clean.json
+
+          jq \
+            --arg container "$ECS_CONTAINER_NAME" \
+            --arg image "$BACKEND_IMAGE" \
+            '.containerDefinitions |= map(if .name == $container then .image = $image else . end)' \
+            task-definition-clean.json > task-definition-new.json
+
+          task_definition_arn="$(aws ecs register-task-definition \
+            --cli-input-json file://task-definition-new.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)"
+
+          echo "task_definition_arn=$task_definition_arn" >> "$GITHUB_OUTPUT"
+
+      - name: Run database migrations on ECS
+        if: vars.ECS_SUBNETS != '' && vars.ECS_SECURITY_GROUPS != ''
+        env:
+          TASK_DEFINITION_ARN: ${{ steps.task-definition.outputs.task_definition_arn }}
+        run: |
+          overrides="$(jq -n \
+            --arg container "$ECS_CONTAINER_NAME" \
+            '{containerOverrides: [{
+              name: $container,
+              environment: [{name: "RUN_MIGRATIONS", value: "true"}],
+              command: ["python", "-c", "print(\"Migrations complete\")"]
+            }]}')"
+
+          network="awsvpcConfiguration={subnets=[$ECS_SUBNETS],securityGroups=[$ECS_SECURITY_GROUPS],assignPublicIp=$ECS_ASSIGN_PUBLIC_IP}"
+
+          task_arn="$(aws ecs run-task \
+            --cluster "$ECS_CLUSTER" \
+            --task-definition "$TASK_DEFINITION_ARN" \
+            --launch-type FARGATE \
+            --network-configuration "$network" \
+            --overrides "$overrides" \
+            --query 'tasks[0].taskArn' \
+            --output text)"
+
+          if [ -z "$task_arn" ] || [ "$task_arn" = "None" ]; then
+            echo "::error::Failed to start migration task"
+            exit 1
+          fi
+
+          aws ecs wait tasks-stopped --cluster "$ECS_CLUSTER" --tasks "$task_arn"
+
+          exit_code="$(aws ecs describe-tasks \
+            --cluster "$ECS_CLUSTER" \
+            --tasks "$task_arn" \
+            --query "tasks[0].containers[?name=='$ECS_CONTAINER_NAME'].exitCode | [0]" \
+            --output text)"
+
+          if [ "$exit_code" != "0" ]; then
+            echo "::error::Migration task failed with exit code $exit_code"
+            exit 1
+          fi
+
+      - name: Update ECS service
+        env:
+          TASK_DEFINITION_ARN: ${{ steps.task-definition.outputs.task_definition_arn }}
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --task-definition "$TASK_DEFINITION_ARN"
+
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE"
+
+  deploy-frontend:
+    name: Deploy frontend to AWS S3
+    runs-on: ubuntu-latest
+    needs:
+      - backend
+      - frontend
+      - docker
+    environment: production
+    if: >-
+      vars.AWS_DEPLOY_ENABLED == 'true' &&
+      (
+        (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+        (github.event_name == 'workflow_dispatch' && inputs.deploy == true)
+      )
+    env:
+      S3_BUCKET: ${{ vars.S3_BUCKET }}
+      CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate frontend deployment config
+        run: |
+          missing=0
+          for name in AWS_REGION S3_BUCKET VITE_API_BASE_URL; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing required GitHub variable: $name"
+              missing=1
+            fi
+          done
+          if [ -z "${AWS_ROLE_TO_ASSUME}" ]; then
+            echo "::error::Missing required GitHub secret: AWS_ROLE_TO_ASSUME"
+            missing=1
+          fi
+          exit "$missing"
+        env:
+          AWS_ROLE_TO_ASSUME: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Sync frontend to S3
+        run: aws s3 sync dist "s3://${S3_BUCKET}" --delete
+
+      - name: Invalidate CloudFront cache
+        if: vars.CLOUDFRONT_DISTRIBUTION_ID != ''
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
+            --paths "/*"
