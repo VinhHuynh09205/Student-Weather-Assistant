@@ -168,7 +168,7 @@ async def test_auth_me_requires_token():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         # Access /me without token
         response = await ac.get("/api/v1/auth/me")
-        assert response.status_code == 403
+        assert response.status_code == 401
 
         # Register and login
         register_payload = {
@@ -658,5 +658,4 @@ async def test_duplicate_locations_prevention():
         }
         res4 = await ac.post("/api/v1/locations", json=loc_far, headers=headers)
         assert res4.status_code == 201
-
 
