@@ -1,7 +1,7 @@
 import { ArrowRight, CalendarClock } from "lucide-react";
 
 import type { StudentAdviceResponse, StudySchedule } from "../../types/weather";
-import { formatScheduleRange, vehicleLabels } from "../../utils/formatters";
+import { formatScheduleRange, getVehicleLabel } from "../../utils/formatters";
 import { Card } from "../common/Card";
 
 type UpcomingStudyPreviewCardProps = {
@@ -30,7 +30,7 @@ export function UpcomingStudyPreviewCard({
         <>
           <div className="study-preview-main">
             <strong>{formatScheduleRange(schedule.study_date, schedule.start_time, schedule.end_time)}</strong>
-            <span>{vehicleLabels[schedule.vehicle_type]}</span>
+            <span>{getVehicleLabel(schedule.vehicle_type)}</span>
           </div>
           <div className="study-preview-score">
             <span>Điểm thuận lợi</span>

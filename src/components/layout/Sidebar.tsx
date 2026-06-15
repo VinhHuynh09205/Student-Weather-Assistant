@@ -1,4 +1,4 @@
-import { BookOpen, Cloud, CloudSun, Home, Settings } from "lucide-react";
+import { BookOpen, CalendarDays, Cloud, CloudSun, Home, Settings } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 import type { AppView } from "../../types/weather";
@@ -11,6 +11,7 @@ const navItems: Array<{ id: AppView; label: string; Icon: LucideIcon }> = [
   { id: "home", label: "Trang chủ", Icon: Home },
   { id: "forecast", label: "Dự báo", Icon: Cloud },
   { id: "study", label: "Trợ lý đi học", Icon: BookOpen },
+  { id: "schedule", label: "Lịch học", Icon: CalendarDays },
   { id: "settings", label: "Cài đặt", Icon: Settings },
 ];
 

@@ -7,11 +7,12 @@ import type {
   UserNotification,
   TestNotificationResponse,
 } from "../types/weather";
+import { getStoredAuthToken } from "../utils/authToken";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://sw-alb-v7-1940911359.ap-southeast-1.elb.amazonaws.com";
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = window.localStorage.getItem("student_weather_token");
+  const token = getStoredAuthToken();
   const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -162,9 +163,20 @@ export function markNotificationAsRead(notificationId: string): Promise<UserNoti
   });
 }
 
+export function deleteNotification(notificationId: string): Promise<void> {
+  return requestJson<void>(`/api/v1/notifications/${notificationId}`, {
+    method: "DELETE",
+  });
+}
+
+export function deleteAllNotifications(): Promise<{ deleted_count: number }> {
+  return requestJson<{ deleted_count: number }>("/api/v1/notifications", {
+    method: "DELETE",
+  });
+}
+
 export function sendTestNotification(): Promise<TestNotificationResponse> {
   return requestJson<TestNotificationResponse>("/api/v1/notifications/test", {
     method: "POST",
   });
 }
-

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,14 @@ class CurrentWeatherReport:
     provider: str = "open_meteo"
     fallback_provider_used: bool = False
     fallback_provider: str | None = None
+    provider_condition: str | None = None
+    effective_condition: str | None = None
+    override_source: str | None = None
+    override_expires_at: datetime | None = None
+    override_report_id: str | None = None
+    override_intensity: str | None = None
+    provider_weather_code: int | None = None
+    provider_weather_description: str | None = None
 
 
 @dataclass(frozen=True)
@@ -81,6 +90,20 @@ class DailyForecastReport:
     provider: str = "open_meteo"
     fallback_provider_used: bool = False
     fallback_provider: str | None = None
+
+
+@dataclass(frozen=True)
+class LocalWeatherOverride:
+    id: str
+    user_id: str
+    location_name: str
+    latitude: float
+    longitude: float
+    reported_condition: str
+    intensity: str | None
+    source: str
+    created_at: datetime
+    expires_at: datetime
 
 
 @dataclass(frozen=True)
@@ -168,3 +191,9 @@ class StudentAdviceReport:
     fallback_provider: str | None = None
     needs_user_confirmation: bool = False
     location_candidates: list[str] | None = None
+    provider_condition: str | None = None
+    effective_condition: str | None = None
+    override_source: str | None = None
+    override_expires_at: datetime | None = None
+    override_report_id: str | None = None
+    override_intensity: str | None = None

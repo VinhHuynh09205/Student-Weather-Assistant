@@ -62,7 +62,7 @@ export function LocationSourcePanel({
       <div className="location-actions">
         <button className="current-location-button" type="button" disabled={isLocating} onClick={onUseCurrentLocation}>
           <Navigation size={18} />
-          <span>Cập nhật GPS</span>
+          <span>Cập nhật vị trí</span>
         </button>
         <button className="change-location-button" type="button" onClick={onClearConfirmed}>
           <MapPin size={18} />
@@ -163,5 +163,4 @@ function resolveStatus({
     description: "Cho phép vị trí để nhận dự báo gần nơi bạn đang ở.",
   };
 }
-
 

@@ -44,6 +44,14 @@ class CurrentWeatherResponse(BaseModel):
     provider: str = "open_meteo"
     fallback_provider_used: bool = False
     fallback_provider: str | None = None
+    provider_condition: str | None = None
+    effective_condition: str | None = None
+    override_source: str | None = None
+    override_expires_at: str | None = None
+    override_report_id: str | None = None
+    override_intensity: str | None = None
+    provider_weather_code: int | None = None
+    provider_weather_description: str | None = None
     needs_user_confirmation: bool = False
     location_candidates: list[str] = []
     current: CurrentWeather
@@ -70,6 +78,14 @@ class CurrentWeatherResponse(BaseModel):
             provider=report.provider,
             fallback_provider_used=report.fallback_provider_used,
             fallback_provider=report.fallback_provider,
+            provider_condition=report.provider_condition,
+            effective_condition=report.effective_condition,
+            override_source=report.override_source,
+            override_expires_at=report.override_expires_at.isoformat() if report.override_expires_at else None,
+            override_report_id=report.override_report_id,
+            override_intensity=report.override_intensity,
+            provider_weather_code=report.provider_weather_code,
+            provider_weather_description=report.provider_weather_description,
             current=CurrentWeather(
                 temperature_c=report.current.temperature_c,
                 apparent_temperature_c=report.current.apparent_temperature_c,

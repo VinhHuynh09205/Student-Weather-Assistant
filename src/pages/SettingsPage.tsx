@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useState, useEffect } from "react";
 import {
   Bell,
   CircleGauge,
@@ -15,6 +15,7 @@ import {
   Search,
   ChevronDown,
   ChevronUp,
+  X,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useAuth } from "../context/AuthContext";
@@ -23,6 +24,7 @@ import { searchLocations } from "../api/weatherApi";
 import type { CurrentWeatherResponse, SearchLocationCandidate, UserNotification } from "../types/weather";
 import { CustomSelect } from "../components/common/CustomSelect";
 import * as userApi from "../api/userApi";
+import { showAppToast, showErrorToast, showSuccessToast } from "../utils/toast";
 
 
 type SettingsPageProps = {
@@ -48,14 +50,38 @@ export function SettingsPage({ currentWeather, onOpenLogin, onOpenStudyAssistant
   const [notificationSuccessMsg, setNotificationSuccessMsg] = useState("");
   const [notificationErrorMsg, setNotificationErrorMsg] = useState("");
   const [notificationsList, setNotificationsList] = useState<UserNotification[]>([]);
+  const [showAllNotifications, setShowAllNotifications] = useState(false);
+  const [deletingNotificationId, setDeletingNotificationId] = useState<string | null>(null);
+  const [isClearingNotifications, setIsClearingNotifications] = useState(false);
+
+  const refreshNotifications = useCallback(async () => {
+    if (!currentUser) {
+      setNotificationsList([]);
+      return;
+    }
+    try {
+      const list = await userApi.getUserNotifications();
+      setNotificationsList(list);
+    } catch (err) {
+      console.error("Failed to load notifications:", err);
+    }
+  }, [currentUser]);
 
   useEffect(() => {
-    if (currentUser && settings.notification_enabled) {
-      userApi.getUserNotifications()
-        .then(setNotificationsList)
-        .catch(err => console.error("Failed to load notifications:", err));
+    void refreshNotifications();
+  }, [refreshNotifications]);
+
+  const applySettingsUpdate = async (
+    payload: Parameters<typeof updateSettings>[0],
+    successMessage: string,
+  ) => {
+    try {
+      await updateSettings(payload);
+      showSuccessToast("Đã áp dụng cài đặt", successMessage);
+    } catch (err) {
+      showErrorToast("Không thể lưu cài đặt", err instanceof Error ? err.message : "Vui lòng thử lại.");
     }
-  }, [currentUser, settings.notification_enabled]);
+  };
 
   const handleNotificationToggle = async (checked: boolean) => {
     setNotificationSuccessMsg("");
@@ -64,7 +90,8 @@ export function SettingsPage({ currentWeather, onOpenLogin, onOpenStudyAssistant
     if (checked) {
       if (!("Notification" in window)) {
         setNotificationErrorMsg("Trình duyệt này không hỗ trợ thông báo.");
-        updateSettings({ notification_enabled: false });
+        await applySettingsUpdate({ notification_enabled: false }, "Thông báo đã được giữ ở trạng thái tắt.");
+        showErrorToast("Không hỗ trợ thông báo", "Trình duyệt này không hỗ trợ browser notification.");
         return;
       }
 
@@ -73,18 +100,22 @@ export function SettingsPage({ currentWeather, onOpenLogin, onOpenStudyAssistant
         if (permission === "granted") {
           await updateSettings({ notification_enabled: true });
           setNotificationSuccessMsg("Đã bật thông báo thành công. Nếu muốn thay đổi, hãy vào Cài đặt.");
+          showSuccessToast("Đã bật thông báo", "Bạn sẽ nhận cảnh báo thời tiết trong ứng dụng.");
           setTimeout(() => setNotificationSuccessMsg(""), 5000);
         } else {
           await updateSettings({ notification_enabled: false });
           setNotificationErrorMsg("Trình duyệt đã chặn thông báo. Hãy bật lại trong cài đặt trình duyệt.");
+          showErrorToast("Thông báo bị chặn", "Trình duyệt chưa cấp quyền thông báo cho website.");
           setTimeout(() => setNotificationErrorMsg(""), 6000);
         }
       } catch (err) {
         console.error("Error requesting notification permission:", err);
         setNotificationErrorMsg("Không thể yêu cầu quyền thông báo.");
+        showErrorToast("Không thể bật thông báo", "Vui lòng kiểm tra quyền thông báo của trình duyệt.");
       }
     } else {
       await updateSettings({ notification_enabled: false });
+      showSuccessToast("Đã tắt thông báo", "Hệ thống sẽ không gửi thông báo mới cho bạn.");
     }
   };
 
@@ -95,8 +126,8 @@ export function SettingsPage({ currentWeather, onOpenLogin, onOpenStudyAssistant
       const res = await userApi.sendTestNotification();
       
       // Refresh list
+      await refreshNotifications();
       const list = await userApi.getUserNotifications();
-      setNotificationsList(list);
 
       // Trigger local browser notification if permission granted and latest test exists
       const latestTest = list.find(n => n.type === "test_alert");
@@ -113,10 +144,13 @@ export function SettingsPage({ currentWeather, onOpenLogin, onOpenStudyAssistant
       // Check for failures
       if (res.channels_failed.includes("email")) {
         setNotificationErrorMsg(`Thất bại: ${res.message}`);
+        showAppToast({ title: "Gửi thử nghiệm có lỗi", message: res.message, variant: "warning" });
       } else if (res.channels_failed.length > 0) {
         setNotificationErrorMsg(`Gửi thử nghiệm thất bại trên kênh: ${res.channels_failed.join(", ")}. ${res.message}`);
+        showAppToast({ title: "Gửi thử nghiệm chưa trọn vẹn", message: res.message, variant: "warning" });
       } else {
         setNotificationSuccessMsg(res.message);
+        showSuccessToast("Đã gửi thông báo thử", res.message);
       }
       
       setTimeout(() => {
@@ -125,6 +159,38 @@ export function SettingsPage({ currentWeather, onOpenLogin, onOpenStudyAssistant
       }, 8000);
     } catch (err) {
       setNotificationErrorMsg(err instanceof Error ? err.message : "Gửi thông báo thử nghiệm thất bại.");
+      showErrorToast("Không thể gửi thử", err instanceof Error ? err.message : "Gửi thông báo thử nghiệm thất bại.");
+    }
+  };
+
+  const handleDeleteNotification = async (notificationId: string) => {
+    setDeletingNotificationId(notificationId);
+    try {
+      await userApi.deleteNotification(notificationId);
+      setNotificationsList((items) => items.filter((item) => item.id !== notificationId));
+      showSuccessToast("Đã xóa thông báo", "Thông báo này đã được xóa khỏi lịch sử.");
+    } catch (err) {
+      showErrorToast("Không thể xóa thông báo", err instanceof Error ? err.message : "Vui lòng thử lại.");
+    } finally {
+      setDeletingNotificationId(null);
+    }
+  };
+
+  const handleDeleteAllNotifications = async () => {
+    if (!notificationsList.length) return;
+    const confirmed = window.confirm("Xóa tất cả lịch sử thông báo? Thao tác này không thể hoàn tác.");
+    if (!confirmed) return;
+
+    setIsClearingNotifications(true);
+    try {
+      const result = await userApi.deleteAllNotifications();
+      setNotificationsList([]);
+      setShowAllNotifications(false);
+      showSuccessToast("Đã xóa lịch sử", `Đã xóa ${result.deleted_count} thông báo.`);
+    } catch (err) {
+      showErrorToast("Không thể xóa tất cả", err instanceof Error ? err.message : "Vui lòng thử lại.");
+    } finally {
+      setIsClearingNotifications(false);
     }
   };
 
@@ -164,9 +230,22 @@ export function SettingsPage({ currentWeather, onOpenLogin, onOpenStudyAssistant
       setLocSearchCandidates(results);
       if (results.length === 0) {
         setAddLocError("Không tìm thấy địa điểm nào khớp với tìm kiếm.");
+        showAppToast({
+          title: "Chưa tìm thấy vị trí",
+          message: "Bạn thử nhập thêm tên xã/phường, huyện hoặc tỉnh để kết quả chính xác hơn.",
+          variant: "warning",
+        });
+      } else {
+        showAppToast({
+          title: "Đã tìm thấy vị trí",
+          message: `Có ${results.length} gợi ý, hãy chọn vị trí đúng nhất trong danh sách.`,
+          variant: "info",
+        });
       }
     } catch (err) {
-      setAddLocError(err instanceof Error ? err.message : "Đã xảy ra lỗi khi tìm kiếm địa điểm.");
+      const errorMsg = err instanceof Error ? err.message : "Đã xảy ra lỗi khi tìm kiếm địa điểm.";
+      setAddLocError(errorMsg);
+      showErrorToast("Không thể tìm vị trí", errorMsg);
     } finally {
       setIsLocSearching(false);
     }
@@ -216,11 +295,13 @@ export function SettingsPage({ currentWeather, onOpenLogin, onOpenStudyAssistant
 
     if (isNaN(lat) || isNaN(lon)) {
       setAddLocError("Vui lòng tìm và chọn địa điểm hoặc nhập tọa độ hợp lệ.");
+      showErrorToast("Thiếu tọa độ", "Vui lòng tìm và chọn địa điểm hoặc nhập tọa độ hợp lệ.");
       return;
     }
 
     if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
       setAddLocError("Vĩ độ phải từ -90 đến 90. Kinh độ phải từ -180 đến 180.");
+      showErrorToast("Tọa độ chưa hợp lệ", "Vĩ độ phải từ -90 đến 90. Kinh độ phải từ -180 đến 180.");
       return;
     }
 
@@ -230,6 +311,7 @@ export function SettingsPage({ currentWeather, onOpenLogin, onOpenStudyAssistant
     // Validate duplicate
     if (isDuplicateLocation(lat, lon, displayName)) {
       setAddLocError("Vị trí này đã được lưu.");
+      showAppToast({ title: "Vị trí đã tồn tại", message: "Vị trí này đã có trong danh sách đã lưu.", variant: "warning" });
       return;
     }
 
@@ -246,6 +328,7 @@ export function SettingsPage({ currentWeather, onOpenLogin, onOpenStudyAssistant
       });
 
       setAddLocSuccess("Đã lưu vị trí thành công!");
+      showSuccessToast("Đã lưu vị trí", `${label} đã được thêm vào danh sách vị trí.`);
       
       // Reset form
       setNewLocLat("");
@@ -260,6 +343,7 @@ export function SettingsPage({ currentWeather, onOpenLogin, onOpenStudyAssistant
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : "Không thể lưu vị trí.";
       setAddLocError(errorMsg);
+      showErrorToast("Không thể lưu vị trí", errorMsg);
     }
   };
 
@@ -286,7 +370,35 @@ export function SettingsPage({ currentWeather, onOpenLogin, onOpenStudyAssistant
         location_provider: currentWeather.location_provider || "fallback",
       });
       setLocSearchQuery(curName);
+      showAppToast({
+        title: "Đã điền vị trí hiện tại",
+        message: "Bạn có thể kiểm tra lại thông tin rồi bấm Thêm vị trí.",
+        variant: "info",
+      });
     }
+  };
+
+  const handleSetDefaultLocation = async (locationId: string) => {
+    try {
+      await setDefaultLoc(locationId);
+      showSuccessToast("Đã đổi vị trí mặc định", "Ứng dụng sẽ ưu tiên vị trí này cho lần dùng tiếp theo.");
+    } catch (err) {
+      showErrorToast("Không thể đổi mặc định", err instanceof Error ? err.message : "Vui lòng thử lại.");
+    }
+  };
+
+  const handleRemoveLocation = async (locationId: string) => {
+    try {
+      await removeLocation(locationId);
+      showSuccessToast("Đã xóa vị trí", "Vị trí đã được gỡ khỏi danh sách đã lưu.");
+    } catch (err) {
+      showErrorToast("Không thể xóa vị trí", err instanceof Error ? err.message : "Vui lòng thử lại.");
+    }
+  };
+
+  const handleLogout = () => {
+    showAppToast({ title: "Đã đăng xuất", message: "Phiên làm việc của bạn đã kết thúc.", variant: "info" });
+    logout();
   };
 
   const labelOptions = [
@@ -326,7 +438,7 @@ export function SettingsPage({ currentWeather, onOpenLogin, onOpenStudyAssistant
                 {currentUser.auth_provider === "local" ? currentUser.username : (currentUser.email || "Google Account")}
               </span>
             </div>
-            <button type="button" className="btn-secondary settings-logout-btn" onClick={logout}>
+            <button type="button" className="btn-secondary settings-logout-btn" onClick={handleLogout}>
               Đăng xuất
             </button>
           </div>
@@ -349,13 +461,13 @@ export function SettingsPage({ currentWeather, onOpenLogin, onOpenStudyAssistant
           <div className="segmented-control settings-control">
             <button
               className={settings.temperature_unit === "celsius" ? "active" : ""}
-              onClick={() => updateSettings({ temperature_unit: "celsius" })}
+              onClick={() => applySettingsUpdate({ temperature_unit: "celsius" }, "Đơn vị nhiệt độ đã đổi sang °C.")}
             >
               °C (Celsius)
             </button>
             <button
               className={settings.temperature_unit === "fahrenheit" ? "active" : ""}
-              onClick={() => updateSettings({ temperature_unit: "fahrenheit" })}
+              onClick={() => applySettingsUpdate({ temperature_unit: "fahrenheit" }, "Đơn vị nhiệt độ đã đổi sang °F.")}
             >
               °F (Fahrenheit)
             </button>
@@ -372,13 +484,19 @@ export function SettingsPage({ currentWeather, onOpenLogin, onOpenStudyAssistant
           <div className="segmented-control settings-control">
             <button
               className={settings.theme_mode === "auto" ? "active" : ""}
-              onClick={() => updateSettings({ theme_mode: "auto" })}
+              onClick={() => applySettingsUpdate({ theme_mode: "auto" }, "Giao diện sẽ tự đổi theo thời tiết và thời gian.")}
             >
               Tự động
             </button>
             <button
+              className={settings.theme_mode === "light" ? "active" : ""}
+              onClick={() => applySettingsUpdate({ theme_mode: "light" }, "Giao diện sáng đã được áp dụng.")}
+            >
+              Sáng
+            </button>
+            <button
               className={settings.theme_mode === "dark" ? "active" : ""}
-              onClick={() => updateSettings({ theme_mode: "dark" })}
+              onClick={() => applySettingsUpdate({ theme_mode: "dark" }, "Giao diện tối đã được áp dụng.")}
             >
               Tối
             </button>
@@ -396,7 +514,14 @@ export function SettingsPage({ currentWeather, onOpenLogin, onOpenStudyAssistant
             <input
               type="checkbox"
               checked={settings.auto_refresh_enabled}
-              onChange={(e) => updateSettings({ auto_refresh_enabled: e.target.checked })}
+              onChange={(e) =>
+                applySettingsUpdate(
+                  { auto_refresh_enabled: e.target.checked },
+                  e.target.checked
+                    ? "Ứng dụng sẽ tự cập nhật thời tiết định kỳ."
+                    : "Ứng dụng sẽ không tự tải lại thời tiết.",
+                )
+              }
             />
             <span className="toggle-slider"></span>
           </label>
@@ -431,80 +556,69 @@ export function SettingsPage({ currentWeather, onOpenLogin, onOpenStudyAssistant
       </section>
 
       {/* Collapsible Notification History */}
-      {currentUser && settings.notification_enabled && (
+      {currentUser && (
         <section className="glass-card settings-panel animate-slide-up">
-          <h2 style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <div className="notification-history-header">
+            <h2>
               <Bell size={22} /> Lịch sử thông báo
-            </span>
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={handleSendTestNotification}
-              style={{ fontSize: "0.8rem", height: "32px", padding: "0 0.75rem", borderRadius: "6px" }}
-            >
-              Gửi thử nghiệm
-            </button>
-          </h2>
+            </h2>
+            <div className="notification-history-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={handleSendTestNotification}
+                disabled={!settings.notification_enabled}
+              >
+                Gửi thử nghiệm
+              </button>
+              <button
+                type="button"
+                className="btn-icon-danger notification-clear-all-btn"
+                onClick={handleDeleteAllNotifications}
+                disabled={!notificationsList.length || isClearingNotifications}
+                title="Xóa tất cả thông báo"
+              >
+                <Trash2 size={16} />
+                <span>{isClearingNotifications ? "Đang xóa..." : "Xóa tất cả"}</span>
+              </button>
+            </div>
+          </div>
           <p className="description-text">
-            Xem lại các thông báo thời tiết lớp học hoặc thử nghiệm đã nhận.
+            Xem lại các thông báo thời tiết lớp học hoặc thử nghiệm đã nhận. Mặc định chỉ hiện thông báo gần nhất để phần cài đặt không bị rối.
           </p>
+          {!settings.notification_enabled ? (
+            <div className="inline-info-banner">
+              Thông báo đang tắt. Bạn vẫn có thể xem hoặc dọn lịch sử cũ, nhưng cần bật thông báo để gửi thử nghiệm.
+            </div>
+          ) : null}
 
           {notificationsList.length > 0 ? (
-            <div className="notifications-history-list" style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginTop: "1rem" }}>
-              {notificationsList.slice(0, 5).map((n) => {
-                const channelLabels: Record<string, string> = {
-                  email: "Email",
-                  browser: "Web",
-                  in_app: "In-app",
-                };
-
-                const statusLabels: Record<string, string> = {
-                  pending: "Đang chờ",
-                  sent: "Đã gửi",
-                  failed: "Thất bại",
-                  read: "Đã đọc",
-                };
-
-                return (
-                  <div key={n.id} className="notification-history-item" style={{
-                    padding: "0.75rem",
-                    background: "rgba(255, 255, 255, 0.03)",
-                    border: "1px solid rgba(255, 255, 255, 0.06)",
-                    borderRadius: "0.6rem",
-                  }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.25rem" }}>
-                      <strong style={{ fontSize: "0.85rem", color: "#ffffff" }}>{n.title}</strong>
-                      <span className={`status-badge status-${n.status}`} style={{
-                        fontSize: "0.65rem",
-                        padding: "0.15rem 0.4rem",
-                        borderRadius: "4px",
-                        fontWeight: "bold",
-                        background: n.status === "read" ? "rgba(74, 222, 128, 0.15)" :
-                                    n.status === "sent" ? "rgba(59, 130, 246, 0.15)" :
-                                    n.status === "failed" ? "rgba(239, 68, 68, 0.15)" : "rgba(245, 158, 11, 0.15)",
-                        color: n.status === "read" ? "#4ade80" :
-                               n.status === "sent" ? "#3b82f6" :
-                               n.status === "failed" ? "#ef4444" : "#f59e0b",
-                      }}>
-                        {statusLabels[n.status] || n.status}
-                      </span>
-                    </div>
-                    <p style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.7)", margin: "0.25rem 0", whiteSpace: "pre-line" }}>{n.message}</p>
-                    {n.status === "failed" && n.error_message && (
-                      <p style={{ fontSize: "0.7rem", color: "#ef4444", margin: "0.25rem 0", background: "rgba(239, 68, 68, 0.05)", padding: "0.25rem 0.5rem", borderRadius: "4px" }}>
-                        ⚠️ Lỗi: {n.error_message}
-                      </p>
-                    )}
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem 1rem", fontSize: "0.65rem", color: "rgba(255,255,255,0.4)", marginTop: "0.4rem" }}>
-                      <span>Kênh: <strong style={{ color: "rgba(255,255,255,0.6)" }}>{channelLabels[n.channel] || n.channel}</strong></span>
-                      <span>Tạo lúc: {new Date(n.created_at).toLocaleString("vi-VN")}</span>
-                      {n.sent_at && <span>Gửi lúc: {new Date(n.sent_at).toLocaleString("vi-VN")}</span>}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            <>
+              <div className="notifications-history-list">
+                {(showAllNotifications ? notificationsList : notificationsList.slice(0, 1)).map((notification) => (
+                  <NotificationHistoryItem
+                    deleting={deletingNotificationId === notification.id}
+                    key={notification.id}
+                    notification={notification}
+                    onDelete={handleDeleteNotification}
+                  />
+                ))}
+              </div>
+              {notificationsList.length > 1 ? (
+                <button
+                  type="button"
+                  className="notification-expand-button"
+                  onClick={() => setShowAllNotifications((value) => !value)}
+                >
+                  {showAllNotifications ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                  <span>
+                    {showAllNotifications
+                      ? "Ẩn bớt thông báo"
+                      : `Xem tất cả ${notificationsList.length} thông báo`}
+                  </span>
+                </button>
+              ) : null}
+            </>
           ) : (
             <p className="empty-copy" style={{ marginTop: "0.5rem" }}>Chưa có thông báo nào được lưu.</p>
           )}
@@ -541,7 +655,7 @@ export function SettingsPage({ currentWeather, onOpenLogin, onOpenStudyAssistant
                     <button
                       className="btn-text-action"
                       type="button"
-                      onClick={() => setDefaultLoc(loc.id)}
+                      onClick={() => handleSetDefaultLocation(loc.id)}
                     >
                       Đặt mặc định
                     </button>
@@ -550,7 +664,7 @@ export function SettingsPage({ currentWeather, onOpenLogin, onOpenStudyAssistant
                     className="btn-icon-danger"
                     type="button"
                     title="Xóa vị trí"
-                    onClick={() => removeLocation(loc.id)}
+                    onClick={() => handleRemoveLocation(loc.id)}
                   >
                     <Trash2 size={16} />
                   </button>
@@ -764,4 +878,94 @@ function SettingRow({
       </div>
     </div>
   );
+}
+
+function NotificationHistoryItem({
+  deleting,
+  notification,
+  onDelete,
+}: {
+  deleting: boolean;
+  notification: UserNotification;
+  onDelete: (notificationId: string) => void;
+}) {
+  const statusLabel = getNotificationStatusLabel(notification.status);
+  const channelLabel = getNotificationChannelLabel(notification.channel);
+  const typeLabel = getNotificationTypeLabel(notification.type);
+  const mainTime = notification.sent_at ?? notification.scheduled_for ?? notification.created_at;
+
+  return (
+    <article className="notification-history-item">
+      <div className="notification-history-main">
+        <div>
+          <div className="notification-title-row">
+            <strong>{notification.title}</strong>
+            <span className="notification-type-chip">{typeLabel}</span>
+          </div>
+          <p>{notification.message}</p>
+        </div>
+        <div className="notification-history-side">
+          <span className={`status-badge status-${notification.status}`}>{statusLabel}</span>
+          <button
+            type="button"
+            className="notification-delete-btn"
+            onClick={() => onDelete(notification.id)}
+            disabled={deleting}
+            title="Xóa thông báo này"
+            aria-label="Xóa thông báo này"
+          >
+            {deleting ? <span className="mini-spinner" aria-hidden="true" /> : <X size={15} />}
+          </button>
+        </div>
+      </div>
+      {notification.error_message ? <p className="notification-error-text">{notification.error_message}</p> : null}
+      <div className="notification-meta-row">
+        <span>{channelLabel}</span>
+        <span>{formatNotificationTime(mainTime)}</span>
+        {notification.risk_level ? <span>Mức rủi ro: {notification.risk_level}</span> : null}
+      </div>
+    </article>
+  );
+}
+
+function getNotificationStatusLabel(statusValue: string): string {
+  const labels: Record<string, string> = {
+    pending: "Đang chờ",
+    sent: "Đã gửi",
+    failed: "Lỗi",
+    read: "Đã đọc",
+  };
+  return labels[statusValue] ?? statusValue;
+}
+
+function getNotificationChannelLabel(channel: string): string {
+  const labels: Record<string, string> = {
+    browser: "Trình duyệt",
+    in_app: "Trong ứng dụng",
+    email: "Email",
+    web: "Web",
+  };
+  return labels[channel] ?? channel;
+}
+
+function getNotificationTypeLabel(type: string): string {
+  const labels: Record<string, string> = {
+    test_alert: "Thử nghiệm",
+    class_reminder: "Lịch học",
+    weather_alert: "Thời tiết",
+  };
+  return labels[type] ?? type;
+}
+
+function formatNotificationTime(value?: string | null): string {
+  if (!value) return "Chưa có thời gian";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("vi-VN", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }

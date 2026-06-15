@@ -2,10 +2,19 @@ from enum import IntEnum
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.deps import get_current_user, get_current_user_optional
 from app.clients.open_meteo_client import OpenMeteoClient
 from app.core.config import Settings, get_settings
+from app.db.models import User
+from app.db.session import get_db
 from app.schemas.advice import StudentAdviceRequest, StudentAdviceResponse
+from app.schemas.local_weather_report import (
+    ClearLocalWeatherReportResponse,
+    LocalWeatherReportCreate,
+    LocalWeatherReportResponse,
+)
 from app.schemas.weather import (
     CurrentWeatherResponse,
     DailyForecastResponse,
@@ -13,6 +22,13 @@ from app.schemas.weather import (
     SearchLocationResponse,
 )
 from app.services.geocoding_service import GeocodingService
+from app.services.local_weather_report_service import (
+    apply_local_weather_override_to_current,
+    create_local_weather_report,
+    deactivate_active_local_reports,
+    get_active_local_weather_report,
+    to_local_weather_override,
+)
 from app.services.location_display_service import LocationDisplayService
 from app.services.student_advice_service import StudentAdviceService
 from app.services.weather_cache import AsyncTTLCache
@@ -99,6 +115,8 @@ def get_student_advice_service(
 @router.get("/current", response_model=CurrentWeatherResponse)
 async def get_current_weather(
     service: Annotated[WeatherService, Depends(get_weather_service)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User | None, Depends(get_current_user_optional)],
     city: Annotated[str | None, Query(min_length=1)] = None,
     latitude: Annotated[float | None, Query(ge=-90, le=90)] = None,
     longitude: Annotated[float | None, Query(ge=-180, le=180)] = None,
@@ -113,6 +131,16 @@ async def get_current_weather(
         )
     else:
         report = await service.get_current_weather(city or "")
+    if current_user is not None:
+        active_report = await get_active_local_weather_report(
+            db,
+            user_id=current_user.id,
+            latitude=report.location.latitude,
+            longitude=report.location.longitude,
+        )
+        report = apply_local_weather_override_to_current(report, to_local_weather_override(active_report))
+    else:
+        report = apply_local_weather_override_to_current(report, None)
     return CurrentWeatherResponse.from_domain(report)
 
 
@@ -183,12 +211,59 @@ async def search_location(
     ]
 
 
+@router.post("/local-report", response_model=LocalWeatherReportResponse)
+async def create_weather_local_report(
+    payload: LocalWeatherReportCreate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> LocalWeatherReportResponse:
+    report = await create_local_weather_report(db, user_id=current_user.id, payload=payload)
+    return LocalWeatherReportResponse.model_validate(report)
+
+
+@router.get("/local-report/active", response_model=LocalWeatherReportResponse | None)
+async def get_active_weather_local_report(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    latitude: Annotated[float | None, Query(ge=-90, le=90)] = None,
+    longitude: Annotated[float | None, Query(ge=-180, le=180)] = None,
+) -> LocalWeatherReportResponse | None:
+    source = "none" if latitude is None and longitude is None else _resolve_location_source(None, latitude, longitude)
+    report = await get_active_local_weather_report(
+        db,
+        user_id=current_user.id,
+        latitude=latitude if source == "coordinates" else None,
+        longitude=longitude if source == "coordinates" else None,
+    )
+    return LocalWeatherReportResponse.model_validate(report) if report else None
+
+
+@router.delete("/local-report/active", response_model=ClearLocalWeatherReportResponse)
+async def clear_active_weather_local_report(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> ClearLocalWeatherReportResponse:
+    cleared_count = await deactivate_active_local_reports(db, user_id=current_user.id)
+    return ClearLocalWeatherReportResponse(cleared=cleared_count > 0)
+
+
 @router.post("/student-advice", response_model=StudentAdviceResponse)
 async def get_student_advice(
     request: StudentAdviceRequest,
     service: Annotated[StudentAdviceService, Depends(get_student_advice_service)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User | None, Depends(get_current_user_optional)],
 ) -> StudentAdviceResponse:
-    report = await service.get_student_advice(request)
+    local_override = None
+    if current_user is not None and request.has_coordinates:
+        active_report = await get_active_local_weather_report(
+            db,
+            user_id=current_user.id,
+            latitude=request.latitude,
+            longitude=request.longitude,
+        )
+        local_override = to_local_weather_override(active_report)
+    report = await service.get_student_advice(request, local_override=local_override)
     return StudentAdviceResponse.from_domain(report)
 
 

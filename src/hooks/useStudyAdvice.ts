@@ -8,9 +8,12 @@ import type {
   StudyShift,
   VehicleType,
   StudyScheduleResponse,
+  UserLocationResponse,
 } from "../types/weather";
 import { useAutoRefresh } from "./useAutoRefresh";
 import { useAuth } from "../context/AuthContext";
+import { showAppToast, showErrorToast, showSuccessToast } from "../utils/toast";
+import { normalizeVehicleType } from "../utils/formatters";
 
 const defaultStartTime = "07:30";
 const defaultEndTime = "11:00";
@@ -51,6 +54,14 @@ export function useStudyAdvice(source: LocationQuery | null) {
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [lastFetchedAt, setLastFetchedAt] = useState<number>(0);
   const [refetchTrigger, setRefetchTrigger] = useState(0);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [upcomingAdvice, setUpcomingAdvice] = useState<StudentAdviceResponse | null>(null);
+  const [upcomingLastFetchedAt, setUpcomingLastFetchedAt] = useState<number>(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   // Auto-select first schedule on load or when list changes
   useEffect(() => {
@@ -68,31 +79,29 @@ export function useStudyAdvice(source: LocationQuery | null) {
     return schedules.find((s) => s.id === selectedScheduleId) || null;
   }, [schedules, selectedScheduleId]);
 
+  const upcomingSchedule = useMemo(() => {
+    return findNextRelevantSchedule(schedules, new Date(nowMs));
+  }, [schedules, nowMs]);
+
+  const upcomingScheduleKey = useMemo(() => {
+    return getScheduleAdviceKey(upcomingSchedule);
+  }, [upcomingSchedule]);
+
   const activeLocationQuery = useMemo<LocationQuery | null>(() => {
-    if (!activeSchedule) return null;
-    if (activeSchedule.location_id) {
-      const loc = savedLocations.find((l) => l.id === activeSchedule.location_id);
-      if (loc) {
-        return {
-          mode: "confirmed",
-          latitude: loc.latitude,
-          longitude: loc.longitude,
-          displayName: loc.display_name,
-          shortDisplayName: loc.short_display_name ?? undefined,
-          administrativeLevels: loc.administrative_levels ?? undefined,
-        };
-      }
-    }
-    return source;
+    return resolveScheduleLocationQuery(activeSchedule, savedLocations, source);
   }, [activeSchedule, savedLocations, source]);
 
+  const upcomingLocationQuery = useMemo<LocationQuery | null>(() => {
+    return resolveScheduleLocationQuery(upcomingSchedule, savedLocations, source);
+  }, [upcomingSchedule, savedLocations, source]);
+
   const sourceKey = useMemo(() => {
-    if (!activeLocationQuery) return "none";
-    if (activeLocationQuery.mode === "current" || activeLocationQuery.mode === "confirmed") {
-      return `${activeLocationQuery.mode}:${activeLocationQuery.latitude}:${activeLocationQuery.longitude}`;
-    }
-    return `city:${activeLocationQuery.city}`;
+    return getLocationQueryKey(activeLocationQuery);
   }, [activeLocationQuery]);
+
+  const upcomingSourceKey = useMemo(() => {
+    return getLocationQueryKey(upcomingLocationQuery);
+  }, [upcomingLocationQuery]);
 
   const studyDateMode = useMemo<StudyDateMode>(
     () => resolveDateMode(studyDate),
@@ -115,12 +124,7 @@ export function useStudyAdvice(source: LocationQuery | null) {
     setLoading(true);
     setError(null);
 
-    const mappedSchedule = {
-      study_date: activeSchedule.study_date || formatInputDate(addDays(new Date(), 1)),
-      start_time: activeSchedule.start_time.slice(0, 5),
-      end_time: activeSchedule.end_time.slice(0, 5),
-      vehicle_type: activeSchedule.vehicle_type,
-    };
+    const mappedSchedule = mapScheduleForAdvice(activeSchedule);
 
     getStudentAdvice(buildAdviceRequest(activeLocationQuery, mappedSchedule))
       .then((nextAdvice) => {
@@ -145,11 +149,46 @@ export function useStudyAdvice(source: LocationQuery | null) {
     };
   }, [activeSchedule, activeLocationQuery, sourceKey, refetchTrigger]);
 
+  useEffect(() => {
+    if (!upcomingSchedule || !upcomingLocationQuery) {
+      setUpcomingAdvice(null);
+      setUpcomingLastFetchedAt(0);
+      return;
+    }
+
+    let ignore = false;
+    const mappedSchedule = mapScheduleForAdvice(upcomingSchedule);
+
+    getStudentAdvice(buildAdviceRequest(upcomingLocationQuery, mappedSchedule))
+      .then((nextAdvice) => {
+        if (!ignore) {
+          setUpcomingAdvice(nextAdvice);
+          setUpcomingLastFetchedAt(Date.now());
+        }
+      })
+      .catch(() => {
+        if (!ignore) {
+          setUpcomingAdvice(null);
+        }
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [upcomingSchedule, upcomingScheduleKey, upcomingLocationQuery, upcomingSourceKey, refetchTrigger]);
+
   useAutoRefresh(
     lastFetchedAt,
     10 * 60 * 1000,
     refresh,
     Boolean(activeSchedule) && Boolean(activeLocationQuery) && !loading && settings.auto_refresh_enabled
+  );
+
+  useAutoRefresh(
+    upcomingLastFetchedAt,
+    10 * 60 * 1000,
+    refresh,
+    Boolean(upcomingSchedule) && Boolean(upcomingLocationQuery) && settings.auto_refresh_enabled
   );
 
   // Validate form schedule parameters on change
@@ -203,7 +242,7 @@ export function useStudyAdvice(source: LocationQuery | null) {
     setStudyDate(sched.study_date || formatInputDate(addDays(new Date(), 1)));
     setStartTime(sched.start_time.slice(0, 5));
     setEndTime(sched.end_time.slice(0, 5));
-    setSelectedVehicle(sched.vehicle_type);
+    setSelectedVehicle(normalizeVehicleType(sched.vehicle_type));
   }, []);
 
   const cancelEdit = useCallback(() => {
@@ -231,15 +270,27 @@ export function useStudyAdvice(source: LocationQuery | null) {
     if (editingScheduleId === id) {
       cancelEdit();
     }
-    await removeSchedule(id);
+    try {
+      await removeSchedule(id);
+      showSuccessToast("Đã xóa lịch học", "Lịch học đã được gỡ khỏi Trợ lý đi học.");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Không thể xóa lịch học.";
+      setScheduleError(message);
+      showErrorToast("Không thể xóa lịch học", message);
+    }
   }, [schedules, selectedScheduleId, editingScheduleId, removeSchedule, cancelEdit]);
 
   const handleSaveSchedule = useCallback(async () => {
-    if (scheduleError) return;
+    if (scheduleError) {
+      showAppToast({ title: "Chưa thể lưu lịch học", message: scheduleError, variant: "warning" });
+      return;
+    }
 
     // Enforce 8 schedule limit when adding new
     if (!editingScheduleId && schedules.length >= 8) {
-      setScheduleError("Bạn chỉ được lưu tối đa 8 lịch học.");
+      const message = "Bạn chỉ được lưu tối đa 8 lịch học.";
+      setScheduleError(message);
+      showAppToast({ title: "Đã đạt giới hạn lịch", message, variant: "warning" });
       return;
     }
 
@@ -254,7 +305,9 @@ export function useStudyAdvice(source: LocationQuery | null) {
     });
 
     if (isDuplicate) {
-      setScheduleError("Lịch học này đã tồn tại.");
+      const message = "Lịch học này đã tồn tại.";
+      setScheduleError(message);
+      showAppToast({ title: "Lịch học bị trùng", message, variant: "warning" });
       return;
     }
 
@@ -263,7 +316,7 @@ export function useStudyAdvice(source: LocationQuery | null) {
       study_date: studyDate,
       start_time: startTime,
       end_time: endTime,
-      vehicle_type: selectedVehicle,
+      vehicle_type: normalizeVehicleType(selectedVehicle),
       location_id: locationId,
       repeat_type: "none",
       repeat_days: null,
@@ -276,12 +329,16 @@ export function useStudyAdvice(source: LocationQuery | null) {
         await editSchedule(editingScheduleId, schedPayload);
         // Retain selection
         setSelectedScheduleId(editingScheduleId);
+        showSuccessToast("Đã cập nhật lịch học", "Thay đổi lịch học đã được lưu.");
       } else {
         await addSchedule(schedPayload);
+        showSuccessToast("Đã lưu lịch học", "Trợ lý sẽ dùng lịch này để phân tích thời tiết đi học.");
       }
       cancelEdit();
     } catch (err) {
-      setScheduleError(err instanceof Error ? err.message : "Đã xảy ra lỗi khi lưu lịch học.");
+      const message = err instanceof Error ? err.message : "Đã xảy ra lỗi khi lưu lịch học.";
+      setScheduleError(message);
+      showErrorToast("Không thể lưu lịch học", message);
     }
   }, [
     editingScheduleId,
@@ -321,6 +378,8 @@ export function useStudyAdvice(source: LocationQuery | null) {
     lastFetchedAt,
     refresh,
     schedule: activeSchedule,
+    upcomingAdvice,
+    upcomingSchedule,
 
 
     // Multi-schedule enhancements
@@ -343,8 +402,7 @@ function buildAdviceRequest(
   source: LocationQuery,
   schedule: { study_date: string; start_time: string; end_time: string; vehicle_type: VehicleType }
 ): StudentAdviceRequest {
-  const vehicleStr = schedule.vehicle_type as string;
-  const mappedVehicle = (vehicleStr === "walk" ? "walking" : vehicleStr) as VehicleType;
+  const mappedVehicle = normalizeVehicleType(schedule.vehicle_type);
 
 
   if (source.mode === "current" || source.mode === "confirmed") {
@@ -368,6 +426,134 @@ function buildAdviceRequest(
     end_time: schedule.end_time,
     vehicle_type: mappedVehicle,
   };
+}
+
+function resolveScheduleLocationQuery(
+  schedule: StudyScheduleResponse | null,
+  savedLocations: UserLocationResponse[],
+  fallbackSource: LocationQuery | null,
+): LocationQuery | null {
+  if (!schedule) return null;
+
+  if (schedule.location_id) {
+    const loc = savedLocations.find((savedLocation) => savedLocation.id === schedule.location_id);
+    if (loc) {
+      return {
+        mode: "confirmed",
+        latitude: loc.latitude,
+        longitude: loc.longitude,
+        displayName: loc.display_name,
+        shortDisplayName: loc.short_display_name ?? undefined,
+        administrativeLevels: loc.administrative_levels ?? undefined,
+      };
+    }
+  }
+
+  return fallbackSource;
+}
+
+function getLocationQueryKey(source: LocationQuery | null): string {
+  if (!source) return "none";
+  if (source.mode === "current" || source.mode === "confirmed") {
+    return `${source.mode}:${source.latitude}:${source.longitude}`;
+  }
+  return `city:${source.city}`;
+}
+
+function mapScheduleForAdvice(schedule: StudyScheduleResponse): {
+  study_date: string;
+  start_time: string;
+  end_time: string;
+  vehicle_type: VehicleType;
+} {
+  return {
+    study_date: schedule.study_date || formatInputDate(addDays(new Date(), 1)),
+    start_time: schedule.start_time.slice(0, 5),
+    end_time: schedule.end_time.slice(0, 5),
+    vehicle_type: normalizeVehicleType(schedule.vehicle_type),
+  };
+}
+
+function getScheduleAdviceKey(schedule: StudyScheduleResponse | null): string {
+  if (!schedule) return "none";
+  return [
+    schedule.id,
+    schedule.study_date ?? "",
+    schedule.start_time,
+    schedule.end_time,
+    schedule.vehicle_type,
+    schedule.location_id ?? "",
+  ].join(":");
+}
+
+function findNextRelevantSchedule(schedules: StudyScheduleResponse[], now: Date): StudyScheduleResponse | null {
+  const candidates = schedules
+    .map((schedule) => getNextScheduleOccurrence(schedule, now))
+    .filter((candidate): candidate is { schedule: StudyScheduleResponse; startAt: Date; endAt: Date } => Boolean(candidate))
+    .sort((a, b) => {
+      const startDiff = a.startAt.getTime() - b.startAt.getTime();
+      if (startDiff !== 0) return startDiff;
+      return a.endAt.getTime() - b.endAt.getTime();
+    });
+
+  return candidates[0]?.schedule ?? null;
+}
+
+function getNextScheduleOccurrence(
+  schedule: StudyScheduleResponse,
+  now: Date,
+): { schedule: StudyScheduleResponse; startAt: Date; endAt: Date } | null {
+  if (!schedule.is_active) return null;
+
+  if (schedule.repeat_type === "weekly" && schedule.repeat_days?.length) {
+    const weekdayMap: Record<string, number> = {
+      sun: 0,
+      mon: 1,
+      tue: 2,
+      wed: 3,
+      thu: 4,
+      fri: 5,
+      sat: 6,
+    };
+    const repeatWeekdays = new Set(schedule.repeat_days.map((day) => weekdayMap[day.toLowerCase()]));
+
+    for (let offset = 0; offset <= 7; offset += 1) {
+      const date = addDays(now, offset);
+      if (!repeatWeekdays.has(date.getDay())) continue;
+
+      const occurrence = buildOccurrence(schedule, formatInputDate(date), now);
+      if (occurrence) return occurrence;
+    }
+
+    return null;
+  }
+
+  if (!schedule.study_date) return null;
+  return buildOccurrence(schedule, schedule.study_date, now);
+}
+
+function buildOccurrence(
+  schedule: StudyScheduleResponse,
+  studyDate: string,
+  now: Date,
+): { schedule: StudyScheduleResponse; startAt: Date; endAt: Date } | null {
+  const startAt = combineLocalDateAndTime(studyDate, schedule.start_time);
+  const endAt = combineLocalDateAndTime(studyDate, schedule.end_time);
+  if (!startAt || !endAt || endAt <= startAt) return null;
+  if (endAt <= now) return null;
+
+  return {
+    schedule: schedule.study_date === studyDate ? schedule : { ...schedule, study_date: studyDate },
+    startAt,
+    endAt,
+  };
+}
+
+function combineLocalDateAndTime(dateStr: string, timeStr: string): Date | null {
+  const [year, month, day] = dateStr.split("-").map(Number);
+  const [hour, minute] = timeStr.slice(0, 5).split(":").map(Number);
+  if (![year, month, day, hour, minute].every(Number.isFinite)) return null;
+  return new Date(year, month - 1, day, hour, minute, 0, 0);
 }
 
 function isDateInRange(dateStr: string): boolean {

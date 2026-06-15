@@ -1,6 +1,6 @@
 export type StudyShift = "morning" | "afternoon" | "evening";
-export type VehicleType = "motorbike" | "bus" | "walking" | "bicycle";
-export type AppView = "home" | "forecast" | "study" | "settings" | "auth";
+export type VehicleType = "motorbike" | "bus" | "walking" | "car" | "bicycle";
+export type AppView = "home" | "forecast" | "study" | "schedule" | "settings" | "auth";
 export type StudyDateMode = "today" | "tomorrow" | "custom";
 export type LocationMode = "current" | "search" | "confirmed";
 
@@ -103,6 +103,12 @@ export interface StudentAdviceResponse {
   provider?: string;
   fallback_provider_used?: boolean;
   fallback_provider?: string | null;
+  provider_condition?: string | null;
+  effective_condition?: string | null;
+  override_source?: string | null;
+  override_expires_at?: string | null;
+  override_report_id?: string | null;
+  override_intensity?: string | null;
   needs_user_confirmation?: boolean;
   location_candidates?: string[];
   study_date: string;
@@ -184,9 +190,44 @@ export interface CurrentWeatherResponse {
   provider?: string;
   fallback_provider_used?: boolean;
   fallback_provider?: string | null;
+  provider_condition?: string | null;
+  effective_condition?: string | null;
+  override_source?: string | null;
+  override_expires_at?: string | null;
+  override_report_id?: string | null;
+  override_intensity?: string | null;
+  provider_weather_code?: number | null;
+  provider_weather_description?: string | null;
   needs_user_confirmation?: boolean;
   location_candidates?: string[];
   current: CurrentWeatherItem;
+}
+
+export type LocalWeatherCondition = "rain" | "no_rain" | "storm";
+export type LocalWeatherIntensity = "light" | "moderate" | "heavy";
+
+export interface LocalWeatherReportPayload {
+  location_name: string;
+  latitude: number;
+  longitude: number;
+  reported_condition: LocalWeatherCondition;
+  intensity?: LocalWeatherIntensity | null;
+  expires_in_minutes?: number;
+}
+
+export interface LocalWeatherReportResponse {
+  id: string;
+  user_id: string;
+  location_name: string;
+  latitude: number;
+  longitude: number;
+  reported_condition: LocalWeatherCondition;
+  intensity: LocalWeatherIntensity | null;
+  source: "user_report" | string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  expires_at: string;
 }
 
 export interface HourlyWeatherResponse {
@@ -326,6 +367,9 @@ export interface UserNotification {
   scheduled_for: string | null;
   sent_at: string | null;
   read_at: string | null;
+  occurrence_key?: string | null;
+  risk_level?: string | null;
+  content_hash?: string | null;
   created_at: string;
   updated_at: string;
 }

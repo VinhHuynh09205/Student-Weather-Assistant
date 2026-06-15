@@ -4,6 +4,7 @@ import { useAuth } from "../../context/AuthContext";
 import { searchLocations } from "../../api/weatherApi";
 import type { SearchLocationCandidate } from "../../types/weather";
 import { CustomSelect } from "../common/CustomSelect";
+import { showAppToast, showErrorToast, showSuccessToast } from "../../utils/toast";
 
 interface LocationSearchModalProps {
   isOpen: boolean;
@@ -21,6 +22,7 @@ export function LocationSearchModal({
   const [candidates, setCandidates] = useState<SearchLocationCandidate[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hasSearched, setHasSearched] = useState(false);
   
   // Selected candidate state
   const [selectedCandidate, setSelectedCandidate] = useState<SearchLocationCandidate | null>(null);
@@ -30,6 +32,8 @@ export function LocationSearchModal({
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const modalRef = useRef<HTMLDivElement>(null);
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const wasOpenRef = useRef(false);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -39,17 +43,24 @@ export function LocationSearchModal({
     }
     if (isOpen) {
       document.addEventListener("keydown", handleKeyDown);
-      // Reset state
-      setQuery("");
-      setCandidates([]);
-      setSelectedCandidate(null);
-      setSaveSuccess(null);
-      setSaveError(null);
     }
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [isOpen, onClose]);
+
+  useEffect(() => {
+    if (isOpen && !wasOpenRef.current) {
+      setQuery("");
+      setCandidates([]);
+      setHasSearched(false);
+      setError(null);
+      setSelectedCandidate(null);
+      setSaveSuccess(null);
+      setSaveError(null);
+    }
+    wasOpenRef.current = isOpen;
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -64,15 +75,32 @@ export function LocationSearchModal({
     setSelectedCandidate(null);
     setSaveSuccess(null);
     setSaveError(null);
+    setHasSearched(true);
 
     try {
       const results = await searchLocations(trimmed);
       setCandidates(results);
       if (results.length === 0) {
         setError("Không tìm thấy địa điểm nào khớp với tìm kiếm.");
+        showAppToast({
+          title: "Chưa tìm thấy vị trí",
+          message: "Bạn thử nhập rõ hơn tên xã/phường, huyện hoặc tỉnh/thành.",
+          variant: "warning",
+        });
+      } else {
+        showAppToast({
+          title: "Đã tìm thấy vị trí",
+          message: `Có ${results.length} gợi ý, hãy chọn vị trí đúng nhất.`,
+          variant: "info",
+        });
       }
+      window.setTimeout(() => {
+        resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }, 40);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Đã xảy ra lỗi khi tìm kiếm.");
+      const message = err instanceof Error ? err.message : "Đã xảy ra lỗi khi tìm kiếm.";
+      setError(message);
+      showErrorToast("Không thể tìm vị trí", message);
     } finally {
       setLoading(false);
     }
@@ -115,6 +143,7 @@ export function LocationSearchModal({
     // Validate duplicate
     if (isDuplicateLocation(selectedCandidate.latitude, selectedCandidate.longitude)) {
       setSaveError("Vị trí này đã được lưu.");
+      showAppToast({ title: "Vị trí đã tồn tại", message: "Vị trí này đã có trong danh sách đã lưu.", variant: "warning" });
       return;
     }
 
@@ -133,19 +162,23 @@ export function LocationSearchModal({
       });
 
       setSaveSuccess("Đã lưu vị trí thành công!");
+      showSuccessToast("Đã lưu vị trí", `${label} đã được thêm vào danh sách vị trí.`);
       setTimeout(() => {
         // Trigger active location selection
         onSelectLocation(selectedCandidate);
         onClose();
       }, 1000);
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "Không thể lưu vị trí.");
+      const message = err instanceof Error ? err.message : "Không thể lưu vị trí.";
+      setSaveError(message);
+      showErrorToast("Không thể lưu vị trí", message);
     }
   };
 
   const handleSelectWithoutSaving = () => {
     if (!selectedCandidate) return;
     onSelectLocation(selectedCandidate);
+    showSuccessToast("Đã đổi vị trí", "Dự báo sẽ được cập nhật theo vị trí bạn vừa chọn.");
     onClose();
   };
 
@@ -185,33 +218,51 @@ export function LocationSearchModal({
           </button>
         </form>
 
-        {loading && <div className="modal-status loading">Đang tìm kiếm địa điểm...</div>}
-        {error && <div className="modal-status error">{error}</div>}
+        {(loading || error || hasSearched) && (
+          <div className="modal-candidates-box location-results-panel" ref={resultsRef}>
+            <p className="candidates-title">
+              {loading
+                ? "Đang tìm kiếm..."
+                : candidates.length > 0
+                  ? `Kết quả tìm kiếm (${candidates.length})`
+                  : "Kết quả tìm kiếm"}
+            </p>
 
-        {candidates.length > 0 && (
-          <div className="modal-candidates-box">
-            <p className="candidates-title">Kết quả tìm kiếm ({candidates.length}):</p>
-            <ul className="candidates-list custom-scrollbar">
-              {candidates.map((candidate, idx) => {
-                const isSelected =
-                  selectedCandidate &&
-                  selectedCandidate.latitude === candidate.latitude &&
-                  selectedCandidate.longitude === candidate.longitude;
+            {loading ? <div className="modal-status loading">Đang tìm kiếm vị trí...</div> : null}
+            {error ? <div className="modal-status error">Không thể tìm kiếm vị trí. Vui lòng thử lại.</div> : null}
+            {!loading && !error && candidates.length === 0 ? (
+              <div className="modal-status empty">Không tìm thấy địa điểm phù hợp.</div>
+            ) : null}
 
-                return (
-                  <li key={`${candidate.latitude}-${candidate.longitude}-${idx}`}>
-                    <button
-                      type="button"
-                      className={`candidate-item-btn ${isSelected ? "selected" : ""}`}
-                      onClick={() => handleSelectCandidate(candidate)}
-                    >
-                      <MapPin size={14} />
-                      <span className="candidate-name">{candidate.display_name}</span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
+            {!loading && !error && candidates.length > 0 ? (
+              <ul className="candidates-list custom-scrollbar" role="listbox" aria-label="Danh sách vị trí tìm thấy">
+                {candidates.map((candidate, idx) => {
+                  const isSelected =
+                    selectedCandidate &&
+                    selectedCandidate.latitude === candidate.latitude &&
+                    selectedCandidate.longitude === candidate.longitude;
+
+                  return (
+                    <li key={`${candidate.latitude}-${candidate.longitude}-${idx}`}>
+                      <button
+                        type="button"
+                        className={`candidate-item-btn location-result-item ${isSelected ? "selected" : ""}`}
+                        onClick={() => handleSelectCandidate(candidate)}
+                        role="option"
+                        aria-selected={Boolean(isSelected)}
+                      >
+                        <MapPin size={16} />
+                        <span className="candidate-copy">
+                          <strong>{getCandidatePrimaryText(candidate)}</strong>
+                          {getCandidateSecondaryText(candidate) ? <small>{getCandidateSecondaryText(candidate)}</small> : null}
+                          {getCandidateAreaText(candidate) ? <em>{getCandidateAreaText(candidate)}</em> : null}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : null}
           </div>
         )}
 
@@ -278,4 +329,37 @@ export function LocationSearchModal({
       </div>
     </div>
   );
+}
+
+function getCandidatePrimaryText(candidate: SearchLocationCandidate): string {
+  return candidate.short_display_name || candidate.city || candidate.display_name;
+}
+
+function getCandidateSecondaryText(candidate: SearchLocationCandidate): string {
+  const primary = getCandidatePrimaryText(candidate);
+  return candidate.display_name && candidate.display_name !== primary ? candidate.display_name : "";
+}
+
+function getCandidateAreaText(candidate: SearchLocationCandidate): string {
+  const admin = candidate.administrative_levels;
+  return joinCandidateParts([
+    admin?.ward_or_commune,
+    admin?.district,
+    admin?.province,
+    candidate.country,
+  ]);
+}
+
+function joinCandidateParts(parts: Array<string | null | undefined>): string {
+  const seen = new Set<string>();
+  const uniqueParts: string[] = [];
+  for (const part of parts) {
+    const normalized = part?.trim();
+    if (!normalized) continue;
+    const key = normalized.toLocaleLowerCase("vi-VN");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniqueParts.push(normalized);
+  }
+  return uniqueParts.join(" - ");
 }

@@ -22,6 +22,9 @@ class NotificationUpdate(BaseModel):
     sent_at: datetime | None = None
     error_message: str | None = None
     read_at: datetime | None = None
+    occurrence_key: str | None = None
+    risk_level: str | None = None
+    content_hash: str | None = None
 
 
 class NotificationResponse(NotificationBase):
@@ -32,6 +35,9 @@ class NotificationResponse(NotificationBase):
     error_message: str | None
     sent_at: datetime | None
     read_at: datetime | None
+    occurrence_key: str | None = None
+    risk_level: str | None = None
+    content_hash: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -44,3 +50,7 @@ class TestNotificationResponse(BaseModel):
     channels_succeeded: list[str]
     channels_failed: list[str]
     message: str
+
+
+class DeleteNotificationsResponse(BaseModel):
+    deleted_count: int

@@ -1,3 +1,5 @@
+import time
+
 import httpx
 import jwt
 import pytest
@@ -162,6 +164,28 @@ async def test_login_success_and_failure():
         assert response3.status_code == 200
         assert "access_token" in response3.json()
 
+        # Remember-me login receives a persistent token and keeps that mode when refreshed.
+        remember_payload = {"username": "auth_test", "password": "correctpassword", "remember_me": True}
+        remember_response = await ac.post("/api/v1/auth/login", json=remember_payload)
+        assert remember_response.status_code == 200
+        remember_token = remember_response.json()["access_token"]
+        remember_decoded = jwt.decode(remember_token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        assert remember_decoded["remember"] is True
+        assert remember_decoded["exp"] - int(time.time()) > 6 * 24 * 60 * 60
+
+        refresh_response = await ac.post(
+            "/api/v1/auth/refresh",
+            headers={"Authorization": f"Bearer {remember_token}"},
+        )
+        assert refresh_response.status_code == 200
+        refreshed_decoded = jwt.decode(
+            refresh_response.json()["access_token"],
+            settings.jwt_secret_key,
+            algorithms=[settings.jwt_algorithm],
+        )
+        assert refreshed_decoded["remember"] is True
+        assert refreshed_decoded["exp"] - int(time.time()) > 6 * 24 * 60 * 60
+
 
 @pytest.mark.anyio
 async def test_auth_me_requires_token():
@@ -297,7 +321,7 @@ async def test_study_schedules_crud_and_upcoming():
             "study_date": tomorrow_str,
             "start_time": "08:00",
             "end_time": "11:30",
-            "vehicle_type": "motorbike",
+            "vehicle_type": "bus",
             "repeat_type": "none",
             "note": "Kiểm tra giữa kỳ",
         }
@@ -307,21 +331,105 @@ async def test_study_schedules_crud_and_upcoming():
         sched_data = create_res.json()
         sched_id = sched_data["id"]
         assert sched_data["title"] == sched_payload["title"]
+        assert sched_data["vehicle_type"] == "bus"
 
         # Test upcoming schedule endpoint
         upcoming_res = await ac.get("/api/v1/schedules/upcoming", headers=headers)
         assert upcoming_res.status_code == 200
         assert upcoming_res.json() is not None
         assert upcoming_res.json()["title"] == "Môn Toán Giải Tích"
+        assert upcoming_res.json()["vehicle_type"] == "bus"
 
         # Update schedule
         update_res = await ac.put(f"/api/v1/schedules/{sched_id}", json={"title": "Giải tích 1"}, headers=headers)
         assert update_res.status_code == 200
         assert update_res.json()["title"] == "Giải tích 1"
+        assert update_res.json()["vehicle_type"] == "bus"
 
         # Delete schedule
         delete_res = await ac.delete(f"/api/v1/schedules/{sched_id}", headers=headers)
         assert delete_res.status_code == 204
+
+
+@pytest.mark.anyio
+async def test_upcoming_schedule_uses_current_or_next_time_window():
+    import datetime as dt
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        await ac.post(
+            "/api/v1/auth/register",
+            json={
+                "username": "upcoming_window_user",
+                "password": "password",
+                "confirm_password": "password",
+                "full_name": "Upcoming Window User",
+            },
+        )
+        token = (
+            await ac.post("/api/v1/auth/login", json={"username": "upcoming_window_user", "password": "password"})
+        ).json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        today_vn = (dt.datetime.utcnow() + dt.timedelta(hours=7)).date().isoformat()
+        current_payload = {
+            "title": "Lá»‹ch Ä‘ang diá»…n ra",
+            "study_date": today_vn,
+            "start_time": "00:00",
+            "end_time": "23:59",
+            "vehicle_type": "motorbike",
+            "repeat_type": "none",
+            "note": None,
+        }
+
+        create_res = await ac.post("/api/v1/schedules", json=current_payload, headers=headers)
+        assert create_res.status_code == 201
+
+        upcoming_res = await ac.get("/api/v1/schedules/upcoming", headers=headers)
+        assert upcoming_res.status_code == 200
+        assert upcoming_res.json()["title"] == current_payload["title"]
+
+
+@pytest.mark.anyio
+async def test_upcoming_schedule_returns_none_when_all_windows_passed():
+    import datetime as dt
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        await ac.post(
+            "/api/v1/auth/register",
+            json={
+                "username": "past_schedule_user",
+                "password": "password",
+                "confirm_password": "password",
+                "full_name": "Past Schedule User",
+            },
+        )
+        token = (
+            await ac.post("/api/v1/auth/login", json={"username": "past_schedule_user", "password": "password"})
+        ).json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        async with async_session() as session:
+            result = await session.execute(select(User).where(User.username == "past_schedule_user"))
+            db_user = result.scalars().first()
+            assert db_user is not None
+            yesterday_vn = (dt.datetime.utcnow() + dt.timedelta(hours=7) - dt.timedelta(days=1)).date().isoformat()
+            session.add(
+                StudySchedule(
+                    user_id=db_user.id,
+                    title="Lá»‹ch Ä‘Ã£ qua",
+                    study_date=yesterday_vn,
+                    start_time="08:00",
+                    end_time="10:00",
+                    vehicle_type="motorbike",
+                    repeat_type="none",
+                    is_active=True,
+                )
+            )
+            await session.commit()
+
+        upcoming_res = await ac.get("/api/v1/schedules/upcoming", headers=headers)
+        assert upcoming_res.status_code == 200
+        assert upcoming_res.json() is None
 
 
 @pytest.mark.anyio
@@ -347,6 +455,7 @@ async def test_settings_get_and_update():
         settings_data = get_res.json()
         assert settings_data["temperature_unit"] == "celsius"
         assert settings_data["theme_mode"] == "auto"
+        assert settings_data["notification_enabled"] is False
 
         # Update settings
         update_res = await ac.put(
@@ -462,7 +571,23 @@ async def test_notifications_endpoints_and_service():
         assert read_data["status"] == "read"
         assert read_data["read_at"] is not None
 
-        # 5. Verify database schedule matching logic for notification scheduling
+        # 5. Test delete one notification and clear all notification history
+        delete_one_res = await ac.delete(f"/api/v1/notifications/{notif_id_to_read}", headers=headers)
+        assert delete_one_res.status_code == 204
+
+        list_after_delete_one = await ac.get("/api/v1/notifications", headers=headers)
+        assert list_after_delete_one.status_code == 200
+        assert all(item["id"] != notif_id_to_read for item in list_after_delete_one.json())
+
+        delete_all_res = await ac.delete("/api/v1/notifications", headers=headers)
+        assert delete_all_res.status_code == 200
+        assert delete_all_res.json()["deleted_count"] >= 1
+
+        list_after_delete_all = await ac.get("/api/v1/notifications", headers=headers)
+        assert list_after_delete_all.status_code == 200
+        assert list_after_delete_all.json() == []
+
+        # 6. Verify database schedule matching logic for notification scheduling
         # Let's create a schedule starting in 45 minutes
         import datetime as dt
 
@@ -546,7 +671,7 @@ async def test_notifications_endpoints_and_service():
             assert created_notifs[0].status == "sent"
             assert created_notifs[1].status == "sent"
 
-        # 6. Test Email Notification Fail / Success scenarios (Mocking/Config checks)
+        # 7. Test Email Notification Fail / Success scenarios (Mocking/Config checks)
         async with async_session() as session:
             # Create a user with email to test email notification provider
             user_email_res = await session.execute(select(User).where(User.username == "notif_user"))
@@ -658,4 +783,3 @@ async def test_duplicate_locations_prevention():
         }
         res4 = await ac.post("/api/v1/locations", json=loc_far, headers=headers)
         assert res4.status_code == 201
-

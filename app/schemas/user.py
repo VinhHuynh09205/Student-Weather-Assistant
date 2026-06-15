@@ -37,6 +37,7 @@ class UserCreate(BaseModel):
 class UserLogin(BaseModel):
     username: str
     password: str
+    remember_me: bool = False
 
 
 class UserResponse(UserBase):
@@ -57,4 +58,3 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     user_id: UUID | None = None
-

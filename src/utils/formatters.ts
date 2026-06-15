@@ -18,8 +18,41 @@ export const vehicleLabels: Record<VehicleType, string> = {
   motorbike: "Xe máy",
   bus: "Xe buýt",
   walking: "Đi bộ",
+  car: "Ô tô",
   bicycle: "Xe đạp",
 };
+
+export const vehicleIcons: Record<VehicleType, string> = {
+  motorbike: "🏍️",
+  bus: "🚌",
+  walking: "🚶",
+  car: "🚗",
+  bicycle: "🚲",
+};
+
+export const vehicleOptions: Array<{ id: VehicleType; icon: string; label: string }> = (
+  Object.keys(vehicleLabels) as VehicleType[]
+).map((id) => ({
+  id,
+  icon: vehicleIcons[id],
+  label: vehicleLabels[id],
+}));
+
+export function normalizeVehicleType(value?: string | null): VehicleType {
+  if (value === "walk") return "walking";
+  if (value === "motorbike" || value === "bus" || value === "walking" || value === "car" || value === "bicycle") {
+    return value;
+  }
+  return "motorbike";
+}
+
+export function getVehicleLabel(value?: string | null): string {
+  return vehicleLabels[normalizeVehicleType(value)];
+}
+
+export function getVehicleIcon(value?: string | null): string {
+  return vehicleIcons[normalizeVehicleType(value)];
+}
 
 export function formatTemperature(value?: number, unit?: "celsius" | "fahrenheit"): string {
   if (typeof value !== "number") return "--";

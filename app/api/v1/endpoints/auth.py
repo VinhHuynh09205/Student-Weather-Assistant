@@ -2,7 +2,7 @@ import random
 import re
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,7 +11,13 @@ from app.core.config import get_settings
 from app.db.models import User, UserSettings
 from app.db.session import get_db
 from app.schemas.user import Token, UserCreate, UserLogin, UserResponse
-from app.utils.security import create_access_token, create_long_lived_access_token, get_password_hash, verify_password
+from app.utils.security import (
+    create_access_token,
+    create_long_lived_access_token,
+    decode_access_token,
+    get_password_hash,
+    verify_password,
+)
 
 settings = get_settings()
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -55,7 +61,7 @@ async def register(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
         temperature_unit="celsius",
         theme_mode="auto",
         auto_refresh_enabled=True,
-        notification_enabled=True,
+        notification_enabled=False,
         default_vehicle_type="motorbike",
     )
     db.add(db_settings)
@@ -82,7 +88,10 @@ async def login(credentials: UserLogin, db: AsyncSession = Depends(get_db)):
             detail="Tài khoản đã bị vô hiệu hóa.",
         )
 
-    access_token = create_access_token(subject=user.id)
+    if credentials.remember_me:
+        access_token = create_long_lived_access_token(subject=user.id, days=7, extra_claims={"remember": True})
+    else:
+        access_token = create_access_token(subject=user.id)
     return Token(access_token=access_token, token_type="bearer")
 
 
@@ -168,7 +177,7 @@ async def google_token_login(req: GoogleTokenRequest, db: AsyncSession = Depends
             temperature_unit="celsius",
             theme_mode="auto",
             auto_refresh_enabled=True,
-            notification_enabled=True,
+            notification_enabled=False,
             default_vehicle_type="motorbike",
         )
         db.add(db_settings)
@@ -191,20 +200,27 @@ async def google_token_login(req: GoogleTokenRequest, db: AsyncSession = Depends
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tài khoản đã bị vô hiệu hóa.")
 
     # Google users get a long-lived token (7 days) for persistent login
-    access_token = create_long_lived_access_token(subject=user.id, days=7)
+    access_token = create_long_lived_access_token(subject=user.id, days=7, extra_claims={"remember": True})
     return Token(access_token=access_token, token_type="bearer")
 
 
 @router.post("/refresh", response_model=Token)
-async def refresh_token(current_user: User = Depends(get_current_user)):
+async def refresh_token(request: Request, current_user: User = Depends(get_current_user)):
     """Issue a new access token for a still-authenticated user.
     
     Google users get 7-day tokens, local users get standard tokens.
     Frontend calls this before token expiry to keep users logged in.
     """
-    if current_user.auth_provider == "google":
-        new_token = create_long_lived_access_token(subject=current_user.id, days=7)
+    token = request.headers.get("Authorization", "").removeprefix("Bearer").strip()
+    payload = decode_access_token(token) if token else None
+    remember_login = bool(payload and payload.get("remember"))
+
+    if current_user.auth_provider == "google" or remember_login:
+        new_token = create_long_lived_access_token(
+            subject=current_user.id,
+            days=7,
+            extra_claims={"remember": True},
+        )
     else:
         new_token = create_access_token(subject=current_user.id)
     return Token(access_token=new_token, token_type="bearer")
-

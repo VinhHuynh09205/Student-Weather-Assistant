@@ -30,12 +30,24 @@ export function useLocationSource() {
     setSearchError(null);
     setIsLocating(true);
 
+    if (!canRequestPreciseLocation()) {
+      setIsLocating(false);
+      if (!currentCoordinates) {
+        setLocationMode("search");
+        setCity(defaultCity);
+      }
+      setLocationError(getInsecureGeolocationMessage());
+      return;
+    }
+
     if (!navigator.geolocation) {
       setIsLocating(false);
-      setCurrentCoordinates(null);
-      setLocationMode("search");
+      if (!currentCoordinates) {
+        setCurrentCoordinates(null);
+        setLocationMode("search");
+        setCity(defaultCity);
+      }
       setLocationError("Trình duyệt không hỗ trợ định vị.");
-      setCity(defaultCity);
       return;
     }
 
@@ -52,18 +64,20 @@ export function useLocationSource() {
       },
       (positionError) => {
         setIsLocating(false);
-        setCurrentCoordinates(null);
-        setLocationMode("search");
+        if (!currentCoordinates) {
+          setCurrentCoordinates(null);
+          setLocationMode("search");
+          setCity(defaultCity);
+        }
         setLocationError(getGeolocationErrorMessage(positionError));
-        setCity(defaultCity);
       },
       {
         enableHighAccuracy: true,
-        timeout: 15000,
-        maximumAge: 30000,
+        timeout: 20000,
+        maximumAge: 0,
       },
     );
-  }, []);
+  }, [currentCoordinates]);
 
   // Check localStorage or default database location on mount/auth load
   useEffect(() => {
@@ -260,7 +274,7 @@ export function useLocationSource() {
 
 function getGeolocationErrorMessage(error: GeolocationPositionError): string {
   if (error.code === error.PERMISSION_DENIED) {
-    return "Bạn chưa cấp quyền vị trí. Vui lòng nhập thành phố để xem thời tiết.";
+    return "Quyền vị trí đang bị chặn hoặc chưa được cấp. Hãy mở cài đặt trang web, cho phép truy cập vị trí, rồi bấm Cập nhật vị trí.";
   }
   if (error.code === error.POSITION_UNAVAILABLE) {
     return "Không thể lấy vị trí hiện tại. Vui lòng thử lại hoặc tìm thành phố thủ công.";
@@ -269,4 +283,16 @@ function getGeolocationErrorMessage(error: GeolocationPositionError): string {
     return "Không thể lấy vị trí hiện tại. Vui lòng thử lại hoặc tìm thành phố thủ công.";
   }
   return "Không thể lấy vị trí hiện tại. Vui lòng thử lại hoặc tìm thành phố thủ công.";
+}
+
+function canRequestPreciseLocation(): boolean {
+  return window.isSecureContext || isLocalDevelopmentHost(window.location.hostname);
+}
+
+function isLocalDevelopmentHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+}
+
+function getInsecureGeolocationMessage(): string {
+  return "Trình duyệt chỉ hiện yêu cầu cấp quyền vị trí khi web chạy bằng HTTPS hoặc localhost. Trang hiện tại đang ở chế độ không bảo mật, nên hãy mở bản HTTPS rồi bấm Cập nhật vị trí.";
 }

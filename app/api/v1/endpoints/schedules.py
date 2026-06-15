@@ -126,6 +126,7 @@ async def get_upcoming_schedule(
     for sched in schedules:
         try:
             sh, sm = map(int, sched.start_time.split(":"))
+            eh, em = map(int, sched.end_time.split(":"))
         except Exception:
             continue
 
@@ -134,9 +135,10 @@ async def get_upcoming_schedule(
                 continue
             try:
                 s_date = datetime.strptime(sched.study_date, "%Y-%m-%d").date()
-                s_dt = datetime.combine(s_date, datetime.min.time().replace(hour=sh, minute=sm))
-                if s_dt > current_dt:
-                    upcoming_candidates.append((sched, s_dt))
+                start_dt = datetime.combine(s_date, datetime.min.time().replace(hour=sh, minute=sm))
+                end_dt = datetime.combine(s_date, datetime.min.time().replace(hour=eh, minute=em))
+                if end_dt > current_dt:
+                    upcoming_candidates.append((sched, start_dt))
             except Exception:
                 continue
         elif sched.repeat_type == "weekly":
@@ -149,14 +151,14 @@ async def get_upcoming_schedule(
                 test_weekday = test_date.weekday()
                 matching_days = [d for d in days if weekday_map.get(d.lower()) == test_weekday]
                 if matching_days:
-                    test_dt = datetime.combine(test_date, datetime.min.time().replace(hour=sh, minute=sm))
-                    if test_dt > current_dt:
-                        upcoming_candidates.append((sched, test_dt))
+                    start_dt = datetime.combine(test_date, datetime.min.time().replace(hour=sh, minute=sm))
+                    end_dt = datetime.combine(test_date, datetime.min.time().replace(hour=eh, minute=em))
+                    if end_dt > current_dt:
+                        upcoming_candidates.append((sched, start_dt))
                         break  # Only get the earliest occurrence for this schedule
 
     if not upcoming_candidates:
-        # Fallback to the latest created active schedule if all are in the past
-        return schedules[0] if schedules else None
+        return None
 
     # Sort by next occurrence datetime
     upcoming_candidates.sort(key=lambda x: x[1])

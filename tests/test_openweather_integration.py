@@ -128,6 +128,32 @@ def test_openweather_provider_normalizes_daily(settings, mock_location):
     assert daily[0].rain_sum_mm == 1.5
 
 
+def test_openweather_provider_maps_heavy_rain_and_showers(settings):
+    provider = OpenWeatherProvider(settings)
+
+    assert provider._parse_current(
+        {
+            "dt": 1623000000,
+            "main": {"temp": 28.0, "feels_like": 31.0, "humidity": 85},
+            "wind": {"speed": 3.0},
+            "weather": [{"id": 502, "description": "mưa lớn"}],
+            "sys": {"sunrise": 1622970000, "sunset": 1623010000},
+        },
+        "Asia/Ho_Chi_Minh",
+    ).weather_code == 65
+
+    assert provider._parse_current(
+        {
+            "dt": 1623000000,
+            "main": {"temp": 28.0, "feels_like": 31.0, "humidity": 85},
+            "wind": {"speed": 3.0},
+            "weather": [{"id": 522, "description": "mưa rào nặng hạt"}],
+            "sys": {"sunrise": 1622970000, "sunset": 1623010000},
+        },
+        "Asia/Ho_Chi_Minh",
+    ).weather_code == 82
+
+
 @pytest.mark.anyio
 async def test_weather_service_uses_openweather_and_fallback(settings, mock_location):
     mock_ow = AsyncMock()

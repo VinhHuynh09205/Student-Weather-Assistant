@@ -158,7 +158,7 @@ export function LocationConfirmationCard({
           onClick={onUseCurrentLocation}
         >
           <Navigation size={16} />
-          <span>Cập nhật GPS</span>
+          <span>Cập nhật vị trí</span>
         </button>
       </div>
     </div>

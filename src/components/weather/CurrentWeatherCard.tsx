@@ -1,7 +1,8 @@
-import { MapPin, CalendarClock, ArrowRight } from "lucide-react";
+import { MapPin, CalendarClock, ArrowRight, CloudRain, RotateCcw } from "lucide-react";
 import { useState } from "react";
 
 import type { Coordinates, CurrentWeatherResponse, WeatherDisplayState, StudentAdviceResponse, StudyScheduleResponse } from "../../types/weather";
+import { useAuth } from "../../context/AuthContext";
 import { formatTemperature, formatScheduleRange } from "../../utils/formatters";
 import { formatWeatherUpdatedAt } from "../../utils/timeHelpers";
 import { getWeatherIcon } from "../../utils/weatherTheme";
@@ -15,7 +16,11 @@ type CurrentWeatherCardProps = {
   studySchedule?: StudyScheduleResponse | null;
   studyAdvice?: StudentAdviceResponse | null;
   hasSavedSchedule?: boolean;
+  isUpdatingLocalWeather?: boolean;
+  onClearLocalWeatherReport?: () => Promise<void>;
   onOpenStudyAssistant?: () => void;
+  onOpenLogin?: () => void;
+  onReportLocalRain?: () => Promise<void>;
 };
 
 export function CurrentWeatherCard({
@@ -26,8 +31,13 @@ export function CurrentWeatherCard({
   studySchedule,
   studyAdvice,
   hasSavedSchedule,
+  isUpdatingLocalWeather,
+  onClearLocalWeatherReport,
   onOpenStudyAssistant,
+  onOpenLogin,
+  onReportLocalRain,
 }: CurrentWeatherCardProps) {
+  const { currentUser } = useAuth();
   const current = currentWeather?.current;
   const display = resolveWeatherLocationDisplay(currentWeather, coordinates, locationMode, locationName);
   const weatherForIcon: WeatherDisplayState = {
@@ -59,6 +69,13 @@ export function CurrentWeatherCard({
   }
 
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
+  const [dismissedLocalPromptKey, setDismissedLocalPromptKey] = useState<string | null>(null);
+  const localPromptKey = buildLocalPromptKey(currentWeather);
+  const hasLocalWeatherOverride = currentWeather?.override_source === "user_report";
+  const shouldShowLocalRainPrompt =
+    !hasLocalWeatherOverride &&
+    shouldSuggestLocalRainCheck(currentWeather) &&
+    dismissedLocalPromptKey !== localPromptKey;
 
   const handleRefineClick = () => {
     const card = document.querySelector(".location-confirmation-card");
@@ -106,6 +123,69 @@ export function CurrentWeatherCard({
           {getWeatherIcon(weatherForIcon)}
         </div>
       </div>
+
+      {hasLocalWeatherOverride ? (
+        <div className="local-weather-report-card active">
+          <div className="local-weather-report-icon">
+            <CloudRain size={20} />
+          </div>
+          <div className="local-weather-report-copy">
+            <strong>Đang ưu tiên thời tiết bạn xác nhận</strong>
+            <p>
+              {current?.weather_description ?? "Đang mưa tại vị trí của bạn"} · Theo xác nhận của bạn
+              {currentWeather?.override_expires_at ? ` đến ${formatLocalReportExpiry(currentWeather.override_expires_at)}` : ""}.
+            </p>
+            {currentWeather?.provider_weather_description ? (
+              <small>Dữ liệu gốc {resolveProviderLabel(currentWeather)}: {currentWeather.provider_weather_description}</small>
+            ) : null}
+          </div>
+          {onClearLocalWeatherReport ? (
+            <button
+              type="button"
+              className="local-weather-report-secondary"
+              disabled={isUpdatingLocalWeather}
+              onClick={() => void onClearLocalWeatherReport()}
+            >
+              <RotateCcw size={15} />
+              Quay lại dự báo
+            </button>
+          ) : null}
+        </div>
+      ) : shouldShowLocalRainPrompt ? (
+        <div className="local-weather-report-card">
+          <div className="local-weather-report-icon">
+            <CloudRain size={20} />
+          </div>
+          <div className="local-weather-report-copy">
+            <strong>Thời tiết thực tế khác dự báo?</strong>
+            <p>Khu vực bạn có đang mưa không? Xác nhận này chỉ áp dụng tạm thời cho vị trí hiện tại.</p>
+          </div>
+          <div className="local-weather-report-actions">
+            <button
+              type="button"
+              className="local-weather-report-primary"
+              disabled={isUpdatingLocalWeather}
+              onClick={() => {
+                if (!currentUser) {
+                  onOpenLogin?.();
+                  return;
+                }
+                void onReportLocalRain?.();
+              }}
+            >
+              {currentUser ? "Đang mưa tại chỗ tôi" : "Đăng nhập để xác nhận"}
+            </button>
+            <button
+              type="button"
+              className="local-weather-report-secondary"
+              disabled={isUpdatingLocalWeather}
+              onClick={() => setDismissedLocalPromptKey(localPromptKey)}
+            >
+              Không mưa
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {/* Quick Study Preview Block */}
       <div className="quick-study-preview-container">
@@ -177,6 +257,40 @@ export function CurrentWeatherCard({
   );
 }
 
+const rainWeatherCodes = new Set([51, 53, 55, 61, 63, 65, 66, 67, 80, 81, 82]);
+const stormWeatherCodes = new Set([95, 96, 99]);
+
+function shouldSuggestLocalRainCheck(currentWeather: CurrentWeatherResponse | null): boolean {
+  const current = currentWeather?.current;
+  if (!current) return false;
+  const weatherCode = current.weather_code;
+  if (weatherCode !== undefined && (rainWeatherCodes.has(weatherCode) || stormWeatherCodes.has(weatherCode))) {
+    return false;
+  }
+  const rainAmount = Math.max(current.rain_mm ?? 0, current.precipitation_mm ?? 0);
+  if (rainAmount > 0) return false;
+
+  const cloudCover = current.cloud_cover_percent ?? 0;
+  const humidity = current.relative_humidity_percent ?? 0;
+  const rainProbability = current.precipitation_probability_percent ?? 0;
+  return cloudCover >= 85 || humidity >= 70 || rainProbability >= 15;
+}
+
+function buildLocalPromptKey(currentWeather: CurrentWeatherResponse | null): string {
+  if (!currentWeather) return "no-weather";
+  return [
+    currentWeather.latitude.toFixed(3),
+    currentWeather.longitude.toFixed(3),
+    currentWeather.current.time ?? "",
+  ].join(":");
+}
+
+function formatLocalReportExpiry(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "khi hết hiệu lực";
+  return date.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+}
+
 function getConvenienceClass(score?: number): string {
   if (score === undefined) return "convenience-loading";
   if (score >= 80) return "convenience-good";
@@ -233,4 +347,3 @@ function resolveWeatherLocationDisplay(
     subtitle: "Đang dùng vị trí hiện tại",
   };
 }
-

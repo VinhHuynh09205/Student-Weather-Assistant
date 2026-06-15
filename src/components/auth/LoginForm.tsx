@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { User, Lock, Eye, EyeOff, ArrowRight } from "lucide-react";
 
 interface LoginFormProps {
-  onSubmit: (username: string, password: string) => Promise<void>;
+  onSubmit: (username: string, password: string, rememberMe: boolean) => Promise<void>;
   isLoading: boolean;
   errorMsg: string;
 }
@@ -24,7 +24,7 @@ export function LoginForm({ onSubmit, isLoading, errorMsg }: LoginFormProps) {
     }
 
     try {
-      await onSubmit(username.trim(), password);
+      await onSubmit(username.trim(), password, rememberMe);
     } catch {
       // Parent component handles specific network/API errors
     }

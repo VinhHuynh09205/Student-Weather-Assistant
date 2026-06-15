@@ -1,7 +1,21 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Uuid
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    Column,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Time,
+    Uuid,
+)
 from sqlalchemy.orm import relationship
 
 from app.db.session import Base
@@ -27,8 +41,10 @@ class User(Base):
     # Relationships
     locations = relationship("UserLocation", back_populates="user", cascade="all, delete-orphan")
     schedules = relationship("StudySchedule", back_populates="user", cascade="all, delete-orphan")
+    weekly_class_schedules = relationship("WeeklyClassSchedule", back_populates="user", cascade="all, delete-orphan")
     settings = relationship("UserSettings", back_populates="user", uselist=False, cascade="all, delete-orphan")
     advice_history = relationship("WeatherAdviceHistory", back_populates="user", cascade="all, delete-orphan")
+    local_weather_reports = relationship("LocalWeatherReport", back_populates="user", cascade="all, delete-orphan")
 
 
 class UserLocation(Base):
@@ -60,7 +76,7 @@ class StudySchedule(Base):
     study_date = Column(String, nullable=True)  # Null for repeating schedules
     start_time = Column(String, nullable=False)  # e.g., "07:30"
     end_time = Column(String, nullable=False)  # e.g., "11:00"
-    vehicle_type = Column(String, default="motorbike", nullable=False)  # motorbike, bus, walk, bicycle
+    vehicle_type = Column(String, default="motorbike", nullable=False)  # motorbike, bus, walking, car, bicycle
     location_id = Column(Uuid(as_uuid=True), ForeignKey("user_locations.id", ondelete="SET NULL"), nullable=True)
     repeat_type = Column(String, default="none", nullable=False)  # none, weekly
     repeat_days = Column(JSON, nullable=True)  # e.g., ["mon", "wed", "fri"]
@@ -74,6 +90,35 @@ class StudySchedule(Base):
     location = relationship("UserLocation")
 
 
+class WeeklyClassSchedule(Base):
+    __tablename__ = "weekly_class_schedules"
+    __table_args__ = (
+        CheckConstraint("day_of_week >= 0 AND day_of_week <= 6", name="ck_weekly_class_schedules_day_of_week"),
+        CheckConstraint("notify_before_minutes >= 0", name="ck_weekly_class_schedules_notify_before_minutes"),
+    )
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    subject_name = Column(String, nullable=False)
+    day_of_week = Column(Integer, nullable=False)
+    start_time = Column(Time, nullable=False)
+    end_time = Column(Time, nullable=False)
+    location_name = Column(String, nullable=True)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    timezone = Column(String, default="Asia/Ho_Chi_Minh", nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    notify_before_minutes = Column(Integer, default=60, nullable=False)
+    rain_alert_enabled = Column(Boolean, default=True, nullable=False)
+    storm_alert_enabled = Column(Boolean, default=True, nullable=False)
+    semester_start_date = Column(Date, nullable=True)
+    semester_end_date = Column(Date, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="weekly_class_schedules")
+
+
 class UserSettings(Base):
     __tablename__ = "user_settings"
 
@@ -82,7 +127,7 @@ class UserSettings(Base):
     temperature_unit = Column(String, default="celsius", nullable=False)  # celsius, fahrenheit
     theme_mode = Column(String, default="auto", nullable=False)  # auto, light, dark
     auto_refresh_enabled = Column(Boolean, default=True, nullable=False)
-    notification_enabled = Column(Boolean, default=True, nullable=False)
+    notification_enabled = Column(Boolean, default=False, nullable=False)
     default_vehicle_type = Column(String, default="motorbike", nullable=False)
     default_location_id = Column(
         Uuid(as_uuid=True), ForeignKey("user_locations.id", ondelete="SET NULL"), nullable=True
@@ -114,6 +159,36 @@ class WeatherAdviceHistory(Base):
     study_schedule = relationship("StudySchedule")
 
 
+class LocalWeatherReport(Base):
+    __tablename__ = "local_weather_reports"
+    __table_args__ = (
+        CheckConstraint(
+            "reported_condition IN ('rain', 'no_rain', 'storm')",
+            name="ck_local_weather_reports_condition",
+        ),
+        CheckConstraint(
+            "intensity IS NULL OR intensity IN ('light', 'moderate', 'heavy')",
+            name="ck_local_weather_reports_intensity",
+        ),
+        Index("ix_local_weather_reports_user_active_expires", "user_id", "is_active", "expires_at"),
+    )
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    location_name = Column(String, nullable=False)
+    latitude = Column(Float, nullable=False)
+    longitude = Column(Float, nullable=False)
+    reported_condition = Column(String, nullable=False)
+    intensity = Column(String, nullable=True)
+    source = Column(String, default="user_report", nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+
+    user = relationship("User", back_populates="local_weather_reports")
+
+
 class Notification(Base):
     __tablename__ = "notifications"
 
@@ -129,10 +204,12 @@ class Notification(Base):
     scheduled_for = Column(DateTime, nullable=True)
     sent_at = Column(DateTime, nullable=True)
     read_at = Column(DateTime, nullable=True)
+    occurrence_key = Column(String, nullable=True, index=True)
+    risk_level = Column(String, nullable=True)
+    content_hash = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
     user = relationship("User")
     schedule = relationship("StudySchedule")
-

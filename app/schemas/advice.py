@@ -1,12 +1,12 @@
 from datetime import date, time
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.domain import StudentAdviceReport
 
 StudyShift = Literal["morning", "afternoon", "evening"]
-VehicleType = Literal["motorbike", "bus", "walking", "bicycle"]
+VehicleType = Literal["motorbike", "bus", "walking", "car", "bicycle"]
 
 SHIFT_PRESETS: dict[StudyShift, tuple[time, time]] = {
     "morning": (time(7, 0), time(11, 0)),
@@ -25,6 +25,13 @@ class StudentAdviceRequest(BaseModel):
     end_time: time | None = None
     vehicle_type: VehicleType
     study_shift: StudyShift | None = None
+
+    @field_validator("vehicle_type", mode="before")
+    @classmethod
+    def normalize_vehicle_type(cls, value: object) -> object:
+        if value == "walk":
+            return "walking"
+        return value
 
     @model_validator(mode="after")
     def validate_study_schedule(self) -> "StudentAdviceRequest":
@@ -116,6 +123,12 @@ class StudentAdviceResponse(BaseModel):
     provider: str = "open_meteo"
     fallback_provider_used: bool = False
     fallback_provider: str | None = None
+    provider_condition: str | None = None
+    effective_condition: str | None = None
+    override_source: str | None = None
+    override_expires_at: str | None = None
+    override_report_id: str | None = None
+    override_intensity: str | None = None
     needs_user_confirmation: bool = False
     location_candidates: list[str] = []
     study_date: str
@@ -157,6 +170,12 @@ class StudentAdviceResponse(BaseModel):
             provider=report.provider,
             fallback_provider_used=report.fallback_provider_used,
             fallback_provider=report.fallback_provider,
+            provider_condition=report.provider_condition,
+            effective_condition=report.effective_condition,
+            override_source=report.override_source,
+            override_expires_at=report.override_expires_at.isoformat() if report.override_expires_at else None,
+            override_report_id=report.override_report_id,
+            override_intensity=report.override_intensity,
             needs_user_confirmation=report.needs_user_confirmation,
             location_candidates=report.location_candidates or [],
             study_date=report.study_date,

@@ -1,7 +1,7 @@
 import { Info } from "lucide-react";
 
 import type { StudentAdviceResponse, VehicleType } from "../../types/weather";
-import { formatScheduleRange, formatTemperature, vehicleLabels } from "../../utils/formatters";
+import { formatScheduleRange, formatTemperature, getVehicleIcon, getVehicleLabel } from "../../utils/formatters";
 import { Card } from "../common/Card";
 
 type AdviceSummaryCardProps = {
@@ -31,8 +31,8 @@ export function AdviceSummaryCard({
             <small>Lịch học</small>
           </article>
           <article>
-            <span>{selectedVehicle === "motorbike" ? "🏍️" : selectedVehicle === "bus" ? "🚌" : selectedVehicle === "walking" ? "🚶" : "🚲"}</span>
-            <strong>{vehicleLabels[selectedVehicle]}</strong>
+            <span>{getVehicleIcon(selectedVehicle)}</span>
+            <strong>{getVehicleLabel(selectedVehicle)}</strong>
             <small>Phương tiện</small>
           </article>
           <article>

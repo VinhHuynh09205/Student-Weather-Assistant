@@ -1,4 +1,6 @@
+import logging
 from dataclasses import replace
+from datetime import datetime, timedelta
 from typing import Any
 
 from app.core.constants import ALLOWED_HOURLY_FORECAST_HOURS
@@ -20,6 +22,16 @@ from app.services.weather_cache import (
 CURRENT_WEATHER_TTL_SECONDS = 5 * 60
 HOURLY_FORECAST_TTL_SECONDS = 10 * 60
 DAILY_FORECAST_TTL_SECONDS = 30 * 60
+NEAR_TERM_WEATHER_LOOKAHEAD = timedelta(hours=3)
+NEAR_TERM_WEATHER_PAST_TOLERANCE = timedelta(minutes=15)
+RAIN_PROBABILITY_OVERRIDE_PERCENT = 70
+HIGH_RAIN_PROBABILITY_OVERRIDE_PERCENT = 85
+RAIN_AMOUNT_OVERRIDE_MM = 0.1
+
+RAIN_WEATHER_CODES = {51, 53, 55, 61, 63, 65, 66, 67, 80, 81, 82}
+STORM_WEATHER_CODES = {95, 96, 99}
+
+logger = logging.getLogger(__name__)
 
 
 class WeatherService:
@@ -247,7 +259,8 @@ class WeatherService:
         return await self._get_daily_forecast_for_location(location, days=days)
 
     async def _get_current_weather_for_location(self, location: Location) -> CurrentWeatherReport:
-        return await self._execute_with_fallback("get_current_weather", location)
+        report = await self._execute_with_fallback("get_current_weather", location)
+        return await self._apply_near_term_weather_signal(report, location)
 
     async def _get_hourly_forecast_for_location(self, location: Location, *, hours: int) -> HourlyForecastReport:
         return await self._execute_with_fallback("get_hourly_forecast", location, hours)
@@ -309,6 +322,43 @@ class WeatherService:
         if not 1 <= days <= 7:
             raise ValueError("days must be between 1 and 7")
 
+    async def _apply_near_term_weather_signal(
+        self,
+        report: CurrentWeatherReport,
+        location: Location,
+    ) -> CurrentWeatherReport:
+        """Use the nearest forecast slot to reduce stale OpenWeather current-condition misses."""
+        if report.provider.lower() != "openweather" or report.fallback_provider_used:
+            return report
+
+        try:
+            hourly_report = await self._execute_with_fallback("get_hourly_forecast", location, 6)
+        except Exception as exc:
+            logger.debug("Skipping near-term weather adjustment because hourly forecast failed: %s", exc)
+            return report
+
+        nearby = _nearby_hourly_items(report.current, hourly_report.hourly)
+        if not nearby:
+            return report
+
+        if report.current.weather_code in STORM_WEATHER_CODES:
+            return _fill_missing_precipitation_probability(report, nearby)
+
+        if report.current.weather_code in RAIN_WEATHER_CODES:
+            storm_signal = _select_near_term_storm_signal(nearby)
+            if storm_signal is None:
+                return _fill_missing_precipitation_probability(report, nearby)
+            return replace(report, current=_adjust_current_with_signal(report.current, storm_signal))
+
+        signal = _select_near_term_precipitation_signal(nearby)
+        if signal is None:
+            return _fill_missing_precipitation_probability(report, nearby)
+
+        adjusted_current = _adjust_current_with_signal(report.current, signal)
+        if adjusted_current == report.current:
+            return report
+        return replace(report, current=adjusted_current)
+
 
 def _rounded_latitude(latitude: float) -> float:
     return round_coordinate_for_cache(latitude)
@@ -316,3 +366,127 @@ def _rounded_latitude(latitude: float) -> float:
 
 def _rounded_longitude(longitude: float) -> float:
     return round_coordinate_for_cache(longitude)
+
+
+def _nearby_hourly_items(current: Any, hourly: list[Any]) -> list[Any]:
+    current_time = _parse_weather_time(current.time)
+    if current_time is None:
+        return hourly[:2]
+
+    nearby = []
+    for item in hourly:
+        item_time = _parse_weather_time(item.time)
+        if item_time is None:
+            continue
+        offset = item_time - current_time
+        if -NEAR_TERM_WEATHER_PAST_TOLERANCE <= offset <= NEAR_TERM_WEATHER_LOOKAHEAD:
+            nearby.append(item)
+    return nearby
+
+
+def _select_near_term_precipitation_signal(hourly: list[Any]) -> Any | None:
+    storm_signal = _select_near_term_storm_signal(hourly)
+    if storm_signal is not None:
+        return storm_signal
+
+    rain_candidates = [item for item in hourly if _is_confident_rain_signal(item)]
+    if not rain_candidates:
+        return None
+    return max(rain_candidates, key=_precipitation_signal_score)
+
+
+def _select_near_term_storm_signal(hourly: list[Any]) -> Any | None:
+    storm_candidates = [item for item in hourly if item.weather_code in STORM_WEATHER_CODES]
+    if not storm_candidates:
+        return None
+    return max(storm_candidates, key=_precipitation_signal_score)
+
+
+def _is_confident_rain_signal(item: Any) -> bool:
+    probability = item.precipitation_probability_percent or 0
+    amount = _precipitation_amount(item)
+    has_rain_code = item.weather_code in RAIN_WEATHER_CODES
+
+    if has_rain_code and (probability >= 50 or amount >= RAIN_AMOUNT_OVERRIDE_MM):
+        return True
+    if probability >= HIGH_RAIN_PROBABILITY_OVERRIDE_PERCENT:
+        return True
+    return probability >= RAIN_PROBABILITY_OVERRIDE_PERCENT and amount >= RAIN_AMOUNT_OVERRIDE_MM
+
+
+def _adjust_current_with_signal(current: Any, signal: Any) -> Any:
+    current_probability = current.precipitation_probability_percent
+    signal_probability = signal.precipitation_probability_percent
+    probability = _max_optional_int(current_probability, signal_probability)
+
+    signal_amount = _precipitation_amount(signal)
+    current_rain = current.rain_mm or 0.0
+    current_precipitation = current.precipitation_mm or 0.0
+    rain_mm = max(current_rain, signal.rain_mm or 0.0, signal_amount)
+    precipitation_mm = max(current_precipitation, rain_mm, signal.precipitation_mm or 0.0)
+
+    if signal.weather_code in STORM_WEATHER_CODES:
+        weather_code = signal.weather_code
+        weather_description = "Có khả năng dông gần khu vực"
+    elif signal.weather_code in RAIN_WEATHER_CODES:
+        weather_code = signal.weather_code
+        weather_description = signal.weather_description or "Có khả năng mưa gần khu vực"
+    else:
+        weather_code = 61
+        weather_description = "Khả năng mưa cao"
+
+    return replace(
+        current,
+        precipitation_probability_percent=probability,
+        precipitation_mm=precipitation_mm,
+        rain_mm=rain_mm,
+        weather_code=weather_code,
+        weather_description=weather_description,
+    )
+
+
+def _fill_missing_precipitation_probability(report: CurrentWeatherReport, hourly: list[Any]) -> CurrentWeatherReport:
+    if report.current.precipitation_probability_percent is not None:
+        return report
+    probabilities = [
+        item.precipitation_probability_percent
+        for item in hourly
+        if item.precipitation_probability_percent is not None
+    ]
+    if not probabilities:
+        return report
+    return replace(
+        report,
+        current=replace(report.current, precipitation_probability_percent=max(probabilities)),
+    )
+
+
+def _precipitation_signal_score(item: Any) -> float:
+    storm_bonus = 1000.0 if item.weather_code in STORM_WEATHER_CODES else 0.0
+    rain_code_bonus = 100.0 if item.weather_code in RAIN_WEATHER_CODES else 0.0
+    probability = float(item.precipitation_probability_percent or 0)
+    amount = _precipitation_amount(item)
+    return storm_bonus + rain_code_bonus + probability + amount * 50.0
+
+
+def _precipitation_amount(item: Any) -> float:
+    return max(float(item.rain_mm or 0.0), float(item.precipitation_mm or 0.0))
+
+
+def _max_optional_int(*values: int | None) -> int | None:
+    numeric_values = [value for value in values if value is not None]
+    if not numeric_values:
+        return None
+    return max(numeric_values)
+
+
+def _parse_weather_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        return parsed.replace(tzinfo=None)
+    return parsed

@@ -3,14 +3,14 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_current_user
 from app.api.v1.endpoints.weather import get_student_advice_service
 from app.db.models import Notification, User
 from app.db.session import get_db
-from app.schemas.notification import NotificationResponse, TestNotificationResponse
+from app.schemas.notification import DeleteNotificationsResponse, NotificationResponse, TestNotificationResponse
 from app.services.notification_service import NotificationService
 from app.services.student_advice_service import StudentAdviceService
 
@@ -61,6 +61,36 @@ async def mark_as_read(
     await db.commit()
     await db.refresh(notif)
     return notif
+
+
+@router.delete("", response_model=DeleteNotificationsResponse)
+async def delete_all_notifications(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(delete(Notification).where(Notification.user_id == current_user.id))
+    await db.commit()
+    return DeleteNotificationsResponse(deleted_count=result.rowcount or 0)
+
+
+@router.delete("/{notification_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_notification(
+    notification_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        delete(Notification)
+        .where(Notification.id == notification_id)
+        .where(Notification.user_id == current_user.id)
+    )
+    if not result.rowcount:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Không tìm thấy thông báo.",
+        )
+    await db.commit()
+    return None
 
 
 @router.post("/test", response_model=TestNotificationResponse)

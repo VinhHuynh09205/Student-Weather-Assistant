@@ -1,13 +1,6 @@
 import type { VehicleType } from "../../types/weather";
-import { vehicleLabels } from "../../utils/formatters";
+import { vehicleOptions } from "../../utils/formatters";
 import { Card } from "../common/Card";
-
-const vehicles: Array<{ id: VehicleType; icon: string }> = [
-  { id: "motorbike", icon: "🏍️" },
-  { id: "bus", icon: "🚌" },
-  { id: "walking", icon: "🚶" },
-  { id: "bicycle", icon: "🚲" },
-];
 
 type VehicleSelectorProps = {
   selectedVehicle: VehicleType;
@@ -18,7 +11,7 @@ type VehicleSelectorProps = {
 export function VehicleSelector({ framed = true, onChange, selectedVehicle }: VehicleSelectorProps) {
   const grid = (
     <div className="vehicle-grid">
-      {vehicles.map((vehicle) => (
+      {vehicleOptions.map((vehicle) => (
         <button
           className={`vehicle-card-btn ${selectedVehicle === vehicle.id ? "selected" : ""}`}
           key={vehicle.id}
@@ -26,7 +19,7 @@ export function VehicleSelector({ framed = true, onChange, selectedVehicle }: Ve
           onClick={() => onChange(vehicle.id)}
         >
           <span className="vehicle-icon">{vehicle.icon}</span>
-          <span className="vehicle-name">{vehicleLabels[vehicle.id]}</span>
+          <span className="vehicle-name">{vehicle.label}</span>
         </button>
       ))}
     </div>

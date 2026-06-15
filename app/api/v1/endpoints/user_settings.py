@@ -24,7 +24,7 @@ async def get_settings(
             temperature_unit="celsius",
             theme_mode="auto",
             auto_refresh_enabled=True,
-            notification_enabled=True,
+            notification_enabled=False,
             default_vehicle_type="motorbike",
         )
         db.add(db_settings)

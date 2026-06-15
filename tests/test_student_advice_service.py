@@ -201,12 +201,35 @@ def test_recommendations_change_by_vehicle_type() -> None:
     motorbike_advice = run_advice(rainy_hourly, vehicle_type="motorbike")
     bus_advice = run_advice(rainy_hourly, vehicle_type="bus")
     walking_advice = run_advice(rainy_hourly, vehicle_type="walking")
+    car_advice = run_advice(rainy_hourly, vehicle_type="car")
+    bicycle_advice = run_advice(rainy_hourly, vehicle_type="bicycle")
 
     assert motorbike_advice.recommendations != bus_advice.recommendations
     assert walking_advice.recommendations != bus_advice.recommendations
+    assert car_advice.recommendations != motorbike_advice.recommendations
+    assert bicycle_advice.recommendations != motorbike_advice.recommendations
+    assert motorbike_advice.vehicle_type == "motorbike"
+    assert bus_advice.vehicle_type == "bus"
+    assert walking_advice.vehicle_type == "walking"
+    assert car_advice.vehicle_type == "car"
+    assert bicycle_advice.vehicle_type == "bicycle"
     assert any("xe máy" in item for item in motorbike_advice.recommendations)
     assert any("xe buýt" in item for item in bus_advice.recommendations)
     assert any("Đi bộ" in item for item in walking_advice.recommendations)
+    assert any("ô tô" in item for item in car_advice.recommendations)
+    assert any("xe đạp" in item for item in bicycle_advice.recommendations)
+
+
+def test_legacy_walk_vehicle_type_is_normalized_to_walking() -> None:
+    rainy_hourly = [
+        make_snapshot("2026-06-06T07:00", precipitation_probability=70),
+        make_snapshot("2026-06-06T08:00", precipitation_probability=72),
+    ]
+
+    advice = run_advice(rainy_hourly, start_time="07:00", end_time="08:00", vehicle_type="walk")
+
+    assert advice.vehicle_type == "walking"
+    assert any("Đi bộ" in item for item in advice.recommendations)
 
 
 def test_hot_schedule_recommends_water_and_sun_protection() -> None:

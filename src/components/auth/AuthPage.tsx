@@ -52,11 +52,11 @@ export function AuthPage({ onLoginSuccess, onSkip }: AuthPageProps) {
     };
   }, []);
 
-  const handleLoginSubmit = async (username: string, password: string) => {
+  const handleLoginSubmit = async (username: string, password: string, rememberMe: boolean) => {
     setError("");
     setIsSubmitting(true);
     try {
-      await login(username, password);
+      await login(username, password, rememberMe);
       checkSyncRequirement();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Đăng nhập thất bại.");

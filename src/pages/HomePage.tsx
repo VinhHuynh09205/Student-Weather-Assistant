@@ -6,6 +6,7 @@ import { HourlyForecastCard } from "../components/weather/HourlyForecastCard";
 import { WeatherAlertCard } from "../components/weather/WeatherAlertCard";
 import { WeatherMetricGrid } from "../components/weather/WeatherMetricGrid";
 import { WeatherTrendCards } from "../components/weather/WeatherTrendCards";
+import { WeeklyQuickSuggestionCard } from "../components/classSchedule/WeeklyQuickSuggestionCard";
 import type {
   Coordinates,
   CurrentWeatherResponse,
@@ -33,9 +34,14 @@ type HomePageProps = {
   studyAdvice: StudentAdviceResponse | null;
   studySchedule: StudyScheduleResponse | null;
   onOpenStudyAssistant: () => void;
+  onOpenWeeklySchedule: () => void;
   onRetry: () => void;
   onRefresh?: () => Promise<void>;
   isRefreshing?: boolean;
+  isUpdatingLocalWeather?: boolean;
+  onClearLocalWeatherReport?: () => Promise<void>;
+  onOpenLogin?: () => void;
+  onReportLocalRain?: () => Promise<void>;
 };
 
 export function HomePage({
@@ -53,7 +59,12 @@ export function HomePage({
   locationMode,
   locationName,
   onOpenStudyAssistant,
+  onOpenLogin,
+  onOpenWeeklySchedule,
   onRetry,
+  isUpdatingLocalWeather,
+  onClearLocalWeatherReport,
+  onReportLocalRain,
   studyAdvice,
   studySchedule,
 }: HomePageProps) {
@@ -72,7 +83,11 @@ export function HomePage({
               studySchedule={studySchedule}
               studyAdvice={studyAdvice}
               hasSavedSchedule={hasSavedSchedule}
+              isUpdatingLocalWeather={isUpdatingLocalWeather}
+              onClearLocalWeatherReport={onClearLocalWeatherReport}
+              onOpenLogin={onOpenLogin}
               onOpenStudyAssistant={onOpenStudyAssistant}
+              onReportLocalRain={onReportLocalRain}
             />
           </div>
 
@@ -95,6 +110,9 @@ export function HomePage({
           <div className="weather-block-stack home-alerts">
             <WeatherAlertCard currentWeather={currentWeather} daily={dailyItems[0]} hourlyItems={hourlyItems} />
           </div>
+          <div className="weather-block-stack home-weekly-quick">
+            <WeeklyQuickSuggestionCard onOpenWeeklySchedule={onOpenWeeklySchedule} />
+          </div>
           <div className="weather-block-stack home-daily-forecast">
             {dailyLoading ? <LoadingState message="Đang tải dự báo nhiều ngày..." /> : null}
             {dailyError ? <ErrorState message={dailyError} onRetry={onRetry} /> : null}
@@ -105,4 +123,3 @@ export function HomePage({
     </section>
   );
 }
-

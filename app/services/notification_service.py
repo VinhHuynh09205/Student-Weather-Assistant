@@ -9,8 +9,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.db.models import Notification, StudySchedule, User, UserLocation, UserSettings
+from app.db.models import Notification, StudySchedule, User, UserLocation, UserSettings, WeeklyClassSchedule
 from app.schemas.advice import StudentAdviceRequest
+from app.services.class_schedule_forecast_service import ClassScheduleForecastService
 from app.services.student_advice_service import StudentAdviceService
 
 logger = logging.getLogger(__name__)
@@ -20,14 +21,21 @@ vehicle_labels = {
     "motorbike": "Xe máy",
     "bicycle": "Xe đạp",
     "bus": "Xe buýt",
+    "walking": "Đi bộ",
     "walk": "Đi bộ",
+    "car": "Ô tô",
 }
 
 
 class NotificationService:
 
-    def __init__(self, advice_service: StudentAdviceService) -> None:
+    def __init__(
+        self,
+        advice_service: StudentAdviceService,
+        class_schedule_forecast_service: ClassScheduleForecastService | None = None,
+    ) -> None:
         self.advice_service = advice_service
+        self.class_schedule_forecast_service = class_schedule_forecast_service
 
     async def create_notification(
         self,
@@ -477,5 +485,39 @@ class NotificationService:
 
                     except Exception as e:
                         logger.exception("Failed to build weather advice for schedule notification: %s", e)
+
+        return scheduled_count
+
+    async def check_and_schedule_weekly_class_notifications(self, db: AsyncSession) -> int:
+        if self.class_schedule_forecast_service is None:
+            return 0
+
+        settings_res = await db.execute(select(UserSettings).where(UserSettings.notification_enabled))
+        active_settings = settings_res.scalars().all()
+        scheduled_count = 0
+
+        for user_settings in active_settings:
+            user_res = await db.execute(select(User).where(User.id == user_settings.user_id))
+            user = user_res.scalars().first()
+            if not user:
+                continue
+
+            schedules_res = await db.execute(
+                select(WeeklyClassSchedule)
+                .where(WeeklyClassSchedule.user_id == user.id)
+                .where(WeeklyClassSchedule.is_active)
+            )
+            schedules = schedules_res.scalars().all()
+
+            for schedule in schedules:
+                try:
+                    forecast = await self.class_schedule_forecast_service.get_forecast_for_next_occurrence(schedule)
+                    scheduled_count += await self.class_schedule_forecast_service.ensure_forecast_notification(
+                        db,
+                        user,
+                        forecast,
+                    )
+                except Exception as exc:
+                    logger.exception("Failed to schedule weekly class notification: %s", exc)
 
         return scheduled_count

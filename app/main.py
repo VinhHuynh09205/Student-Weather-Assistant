@@ -44,6 +44,7 @@ async def run_notification_worker():
     from app.db.session import async_session
     from app.providers.weather.open_meteo import OpenMeteoProvider
     from app.providers.weather.open_weather import OpenWeatherProvider
+    from app.services.class_schedule_forecast_service import ClassScheduleForecastService
     from app.services.geocoding_service import GeocodingService
     from app.services.location_display_service import LocationDisplayService
     from app.services.notification_service import NotificationService
@@ -73,7 +74,8 @@ async def run_notification_worker():
     )
 
     advice_service = StudentAdviceService(weather_service, cache=AsyncTTLCache())
-    notification_service = NotificationService(advice_service)
+    class_schedule_forecast_service = ClassScheduleForecastService(weather_service)
+    notification_service = NotificationService(advice_service, class_schedule_forecast_service)
 
     while True:
         try:
@@ -81,6 +83,10 @@ async def run_notification_worker():
                 scheduled_count = await notification_service.check_and_schedule_study_notifications(db)
                 if scheduled_count > 0:
                     logger.info("Scheduled %d new study notifications.", scheduled_count)
+
+                weekly_scheduled_count = await notification_service.check_and_schedule_weekly_class_notifications(db)
+                if weekly_scheduled_count > 0:
+                    logger.info("Scheduled %d new weekly class notifications.", weekly_scheduled_count)
 
                 sent_count = await notification_service.send_pending_notifications(db)
                 if sent_count > 0:

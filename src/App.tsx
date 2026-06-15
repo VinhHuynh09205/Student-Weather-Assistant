@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bell } from "lucide-react";
 import { LoadingState } from "./components/common/LoadingState";
 import { AppLayout } from "./components/layout/AppLayout";
@@ -16,12 +16,15 @@ import { ForecastPage } from "./pages/ForecastPage";
 import { HomePage } from "./pages/HomePage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { StudyAssistantPage } from "./pages/StudyAssistantPage";
-import type { AppView, SearchLocationCandidate } from "./types/weather";
+import { WeeklySchedulePage } from "./pages/WeeklySchedulePage";
+import type { AppView, SearchLocationCandidate, UserNotification } from "./types/weather";
 import { formatLocationDisplay, formatShortDate } from "./utils/formatters";
 import { resolveWeatherTheme } from "./utils/weatherTheme";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { AuthPage } from "./components/auth/AuthPage";
 import * as userApi from "./api/userApi";
+import * as weatherApi from "./api/weatherApi";
+import { appToastEventName, type AppToastPayload, type AppToastVariant } from "./utils/toast";
 
 
 export default function App() {
@@ -40,6 +43,7 @@ function AppContent() {
     }
     if (path === "/forecast") return "forecast";
     if (path === "/study") return "study";
+    if (path === "/schedule" || path === "/class-schedules") return "schedule";
     if (path === "/settings") return "settings";
     return "home";
   });
@@ -66,6 +70,8 @@ function AppContent() {
         setActiveView("forecast");
       } else if (path === "/study") {
         setActiveView("study");
+      } else if (path === "/schedule" || path === "/class-schedules") {
+        setActiveView("schedule");
       } else if (path === "/settings") {
         setActiveView("settings");
       } else {
@@ -79,15 +85,30 @@ function AppContent() {
   const { settings, currentUser, updateSettings } = useAuth();
 
   // Toast notifications state
-  const [toasts, setToasts] = useState<Array<{ id: string; title: string; message: string }>>([]);
+  const [toasts, setToasts] = useState<Array<{ id: string; title: string; message: string; variant: AppToastVariant }>>([]);
+  const shownNotificationIdsRef = useRef<Set<string>>(new Set());
 
-  const addToast = (title: string, message: string) => {
+  const addToast = useCallback((title: string, message: string, variant: AppToastVariant = "info") => {
     const id = Math.random().toString(36).substring(2, 9);
-    setToasts(prev => [...prev, { id, title, message }]);
+    setToasts(prev => [...prev, { id, title, message, variant }]);
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 6000);
-  };
+  }, []);
+
+  useEffect(() => {
+    const handleAppToast = (event: Event) => {
+      const detail = (event as CustomEvent<AppToastPayload>).detail;
+      if (!detail?.title || !detail.message) return;
+      addToast(detail.title, detail.message, detail.variant ?? "info");
+    };
+    window.addEventListener(appToastEventName, handleAppToast);
+    return () => window.removeEventListener(appToastEventName, handleAppToast);
+  }, [addToast]);
+
+  useEffect(() => {
+    shownNotificationIdsRef.current.clear();
+  }, [currentUser?.id]);
 
   // Onboarding prompt state
   const [showOnboardingPrompt, setShowOnboardingPrompt] = useState(false);
@@ -119,15 +140,19 @@ function AppContent() {
           const permission = await Notification.requestPermission();
           if (permission === "granted") {
             await updateSettings({ notification_enabled: true });
+            addToast("Đã bật thông báo", "Bạn sẽ nhận cảnh báo thời tiết cho lịch học sắp tới.", "success");
           } else {
-            updateSettings({ notification_enabled: false });
+            await updateSettings({ notification_enabled: false });
+            addToast("Thông báo chưa được bật", "Trình duyệt chưa cấp quyền thông báo cho website.", "warning");
           }
         } catch (err) {
           console.error("Error requesting permission:", err);
-          updateSettings({ notification_enabled: false });
+          await updateSettings({ notification_enabled: false });
+          addToast("Không thể bật thông báo", "Vui lòng kiểm tra quyền thông báo trong trình duyệt.", "error");
         }
       } else {
-        updateSettings({ notification_enabled: false });
+        await updateSettings({ notification_enabled: false });
+        addToast("Không hỗ trợ thông báo", "Trình duyệt này chưa hỗ trợ browser notification.", "warning");
       }
     }
   };
@@ -137,6 +162,7 @@ function AppContent() {
       localStorage.setItem(`student_weather_notif_prompted_${currentUser.id}`, "true");
       setShowOnboardingPrompt(false);
       updateSettings({ notification_enabled: false });
+      addToast("Đã giữ thông báo ở trạng thái tắt", "Bạn có thể bật lại trong Cài đặt khi cần.", "info");
     }
   };
 
@@ -147,23 +173,35 @@ function AppContent() {
     const fetchAndShowNotifications = async () => {
       try {
         const list = await userApi.getUserNotifications();
-        // Filters notifications that are sent and either in_app or browser
-        const unread = list.filter(n => n.status === "sent" && (n.channel === "in_app" || n.channel === "browser"));
-        for (const notif of unread) {
-          // Show in-app toast since the tab is open
-          addToast(notif.title, notif.message);
+        const unread = list.filter(isUnreadAppNotification);
+        const fresh = unread.filter((notif) => isFreshNotification(notif));
+        const stale = unread.filter((notif) => !isFreshNotification(notif));
 
-          // Show browser notification if channel is browser and permission is granted
-          if (notif.channel === "browser" && Notification.permission === "granted") {
+        stale.forEach((notif) => shownNotificationIdsRef.current.add(notif.id));
+        await Promise.allSettled(stale.map((notif) => userApi.markNotificationAsRead(notif.id)));
+
+        const groupedNotifications = groupNotifications(
+          fresh.filter((notif) => !shownNotificationIdsRef.current.has(notif.id)),
+        );
+
+        for (const group of groupedNotifications) {
+          group.forEach((notif) => shownNotificationIdsRef.current.add(notif.id));
+
+          const displayNotification = pickDisplayNotification(group);
+          addToast(displayNotification.title, displayNotification.message);
+
+          const browserNotification = group.find((notif) => notif.channel === "browser");
+          if (browserNotification && canShowBrowserNotification()) {
             try {
-              new Notification(notif.title, {
-                body: notif.message,
+              new Notification(browserNotification.title, {
+                body: browserNotification.message,
               });
             } catch (err) {
               console.error("Error displaying browser notification:", err);
             }
           }
-          await userApi.markNotificationAsRead(notif.id);
+
+          await Promise.allSettled(group.map((notif) => userApi.markNotificationAsRead(notif.id)));
         }
       } catch (err) {
         console.error("Failed to poll notifications:", err);
@@ -171,9 +209,9 @@ function AppContent() {
     };
 
     fetchAndShowNotifications();
-    const timer = setInterval(fetchAndShowNotifications, 20000);
+    const timer = setInterval(fetchAndShowNotifications, 60000);
     return () => clearInterval(timer);
-  }, [currentUser, settings.notification_enabled]);
+  }, [addToast, currentUser, settings.notification_enabled]);
 
   const location = useLocationSource();
 
@@ -187,11 +225,14 @@ function AppContent() {
     const weatherState = { ...currentWeather.weatherForTheme };
     if (settings.theme_mode === "dark") {
       weatherState.is_day = false;
+    } else if (settings.theme_mode === "light") {
+      weatherState.is_day = true;
     }
     return resolveWeatherTheme(weatherState);
   }, [currentWeather.weatherForTheme, settings.theme_mode]);
 
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isUpdatingLocalWeather, setIsUpdatingLocalWeather] = useState(false);
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
     try {
@@ -201,11 +242,67 @@ function AppContent() {
         dailyForecast.refresh(),
         studyAdvice.refresh(),
       ]);
+      addToast("Đã cập nhật thời tiết", "Dữ liệu thời tiết và trợ lý đi học đã được làm mới.", "success");
     } catch (e) {
       console.error("Failed to refresh some data:", e);
+      addToast("Không thể cập nhật đầy đủ", "Một phần dữ liệu chưa tải được, vui lòng thử lại.", "error");
       throw e;
     } finally {
       setIsRefreshing(false);
+    }
+  };
+
+  const handleReportLocalRain = async () => {
+    if (!currentUser) {
+      addToast("Cần đăng nhập", "Hãy đăng nhập để xác nhận thời tiết thực tế tại vị trí của bạn.", "warning");
+      handleNavigate("auth");
+      return;
+    }
+    const weather = currentWeather.data;
+    if (!weather) {
+      addToast("Chưa có dữ liệu vị trí", "Vui lòng chờ tải thời tiết hiện tại rồi thử lại.", "warning");
+      return;
+    }
+
+    setIsUpdatingLocalWeather(true);
+    try {
+      await weatherApi.createLocalWeatherReport({
+        location_name: currentLocationName,
+        latitude: weather.latitude,
+        longitude: weather.longitude,
+        reported_condition: "rain",
+        intensity: "moderate",
+        expires_in_minutes: 120,
+      });
+      await Promise.all([currentWeather.refresh(), studyAdvice.refresh()]);
+      addToast(
+        "Đã ghi nhận mưa tại chỗ",
+        "Gợi ý thời tiết sẽ ưu tiên xác nhận của bạn trong 2 giờ tới.",
+        "success",
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Không thể lưu xác nhận thời tiết tại chỗ.";
+      addToast("Không thể ghi nhận thời tiết", message, "error");
+    } finally {
+      setIsUpdatingLocalWeather(false);
+    }
+  };
+
+  const handleClearLocalWeatherReport = async () => {
+    if (!currentUser) {
+      handleNavigate("auth");
+      return;
+    }
+    setIsUpdatingLocalWeather(true);
+    try {
+      await weatherApi.clearActiveLocalWeatherReport();
+      await Promise.all([currentWeather.refresh(), studyAdvice.refresh()]);
+      addToast("Đã quay lại dữ liệu dự báo", "Hệ thống sẽ dùng lại dữ liệu OpenWeather bình thường.", "info");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Không thể hủy xác nhận thời tiết.";
+      addToast("Không thể hủy xác nhận", message, "error");
+    } finally {
+      setIsUpdatingLocalWeather(false);
     }
   };
 
@@ -373,9 +470,14 @@ function AppContent() {
               locationMode={location.locationMode}
               locationName={currentLocationName}
               coordinates={location.currentCoordinates}
-              studyAdvice={studyAdvice.advice}
-              studySchedule={studyAdvice.schedule}
-              onOpenStudyAssistant={() => setActiveView("study")}
+              studyAdvice={studyAdvice.upcomingAdvice}
+              studySchedule={studyAdvice.upcomingSchedule}
+              isUpdatingLocalWeather={isUpdatingLocalWeather}
+              onClearLocalWeatherReport={handleClearLocalWeatherReport}
+              onOpenLogin={() => handleNavigate("auth")}
+              onOpenStudyAssistant={() => handleNavigate("study")}
+              onOpenWeeklySchedule={() => handleNavigate("schedule")}
+              onReportLocalRain={handleReportLocalRain}
               onRetry={handleRetry}
               onRefresh={handleManualRefresh}
               isRefreshing={isRefreshing}
@@ -432,6 +534,14 @@ function AppContent() {
             />
           ) : null}
 
+          {activeView === "schedule" ? (
+            <WeeklySchedulePage
+              currentWeather={currentWeather.data}
+              locationName={currentLocationName}
+              onOpenLogin={() => handleNavigate("auth")}
+            />
+          ) : null}
+
           {activeView === "settings" ? (
             <SettingsPage
               currentWeather={currentWeather.data}
@@ -444,55 +554,28 @@ function AppContent() {
       </AppLayout>
 
       {/* Global In-app Toast Container */}
-      <div className="toast-container" style={{
-        position: "fixed",
-        bottom: "2rem",
-        right: "2rem",
-        zIndex: 9999,
-        display: "flex",
-        flexDirection: "column",
-        gap: "0.75rem",
-        maxWidth: "350px",
-        pointerEvents: "none"
-      }}>
+      <div className="toast-container">
         {toasts.map(toast => (
-          <div key={toast.id} className="glass-card animate-slide-up" style={{
-            padding: "1rem",
-            background: "rgba(15, 23, 42, 0.85)",
-            backdropFilter: "blur(12px)",
-            border: "1px solid rgba(255, 255, 255, 0.15)",
-            borderRadius: "0.75rem",
-            boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.4)",
-            color: "#ffffff",
-            pointerEvents: "auto"
-          }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.25rem" }}>
-              <strong style={{ fontSize: "0.85rem", color: "#3b82f6" }}>{toast.title}</strong>
+          <div key={toast.id} className={`app-toast app-toast-${toast.variant} animate-slide-up`}>
+            <div className="app-toast-header">
+              <strong>{toast.title}</strong>
               <button 
                 onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))}
-                style={{
-                  background: "none",
-                  border: "none",
-                  color: "rgba(255,255,255,0.4)",
-                  cursor: "pointer",
-                  fontSize: "0.75rem",
-                  padding: 0
-                }}
+                type="button"
+                aria-label="Đóng thông báo"
               >
                 ✕
               </button>
             </div>
-            <p style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.85)", margin: 0, whiteSpace: "pre-line" }}>
-              {toast.message}
-            </p>
+            <p>{toast.message}</p>
           </div>
         ))}
       </div>
 
       {/* Onboarding Notification Consent Prompt */}
       {showOnboardingPrompt && (
-        <div className="auth-modal-overlay" style={{ zIndex: 9999 }}>
-          <div className="auth-modal-container glass-effect" style={{ maxWidth: "420px", padding: "2rem" }}>
+        <div className="notification-onboarding-layer">
+          <div className="notification-onboarding-card glass-effect">
             <div style={{ textAlign: "center", marginBottom: "1.5rem" }}>
               <div style={{
                 display: "inline-flex",
@@ -536,6 +619,67 @@ function AppContent() {
         </div>
       )}
     </DynamicWeatherBackground>
+  );
+}
+
+const notificationFreshWindowMs = 2 * 60 * 60 * 1000;
+
+function isUnreadAppNotification(notification: UserNotification): boolean {
+  return (
+    notification.status === "sent" &&
+    notification.read_at === null &&
+    (notification.channel === "in_app" || notification.channel === "browser")
+  );
+}
+
+function isFreshNotification(notification: UserNotification): boolean {
+  const time = notification.sent_at ?? notification.scheduled_for ?? notification.created_at;
+  const timestamp = Date.parse(time ?? "");
+  if (Number.isNaN(timestamp)) return true;
+  return Date.now() - timestamp <= notificationFreshWindowMs;
+}
+
+function groupNotifications(notifications: UserNotification[]): UserNotification[][] {
+  const groups = new Map<string, UserNotification[]>();
+  for (const notification of notifications) {
+    const key = getNotificationGroupKey(notification);
+    const group = groups.get(key);
+    if (group) {
+      group.push(notification);
+    } else {
+      groups.set(key, [notification]);
+    }
+  }
+  return Array.from(groups.values());
+}
+
+function getNotificationGroupKey(notification: UserNotification): string {
+  if (notification.schedule_id) {
+    return [
+      notification.type,
+      notification.schedule_id,
+      notification.scheduled_for ?? "",
+      notification.title,
+    ].join(":");
+  }
+
+  return [
+    notification.type,
+    notification.scheduled_for ?? notification.created_at,
+    notification.title,
+    notification.message.slice(0, 120),
+  ].join(":");
+}
+
+function pickDisplayNotification(group: UserNotification[]): UserNotification {
+  return group.find((notification) => notification.channel === "in_app") ?? group[0];
+}
+
+function canShowBrowserNotification(): boolean {
+  return (
+    "Notification" in window &&
+    Notification.permission === "granted" &&
+    document.visibilityState === "hidden"
   );
 }
 
@@ -641,6 +785,14 @@ function getHeaderContent(
       kicker: "Cá nhân hóa theo lịch học",
       title: "Trợ lý đi học",
       description: "Thiết lập buổi học để nhận điểm thuận lợi, cảnh báo và danh sách chuẩn bị.",
+    };
+  }
+
+  if (activeView === "schedule") {
+    return {
+      kicker: "Lịch học thời tiết",
+      title: "Lịch học & Dự báo thời tiết",
+      description: "Theo dõi thời tiết cho các buổi học hằng tuần của bạn.",
     };
   }
 

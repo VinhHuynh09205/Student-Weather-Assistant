@@ -5,6 +5,7 @@ import { ForecastHighlightsCard } from "../components/weather/ForecastHighlights
 import { HourlyForecastCard } from "../components/weather/HourlyForecastCard";
 import { RainProbabilityCard } from "../components/weather/RainProbabilityCard";
 import { TemperatureChart } from "../components/weather/TemperatureChart";
+import { WeatherApiDetailsCard } from "../components/weather/WeatherApiDetailsCard";
 import { WeatherMetricGrid } from "../components/weather/WeatherMetricGrid";
 import { WeatherTrendCards } from "../components/weather/WeatherTrendCards";
 import type { CurrentWeatherResponse, DailyForecastItem, HourlyForecastItem } from "../types/weather";
@@ -51,6 +52,13 @@ export function ForecastPage({
         <WeatherTrendCards items={hourlyItems} />
         <div className="weather-block-stack full-row">
           <ForecastHighlightsCard hourlyItems={hourlyItems} dailyItems={dailyItems} />
+        </div>
+        <div className="weather-block-stack full-row">
+          <WeatherApiDetailsCard
+            currentWeather={currentWeather}
+            dailyItems={dailyItems}
+            hourlyItems={hourlyItems}
+          />
         </div>
         <div className="weather-block-stack full-row">
           {dailyLoading ? <LoadingState message="Đang tải dự báo nhiều ngày..." /> : null}

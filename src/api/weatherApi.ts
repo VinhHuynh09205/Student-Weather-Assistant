@@ -2,10 +2,13 @@ import type {
   CurrentWeatherResponse,
   DailyWeatherResponse,
   HourlyWeatherResponse,
+  LocalWeatherReportPayload,
+  LocalWeatherReportResponse,
   LocationQuery,
   StudentAdviceRequest,
   StudentAdviceResponse,
 } from "../types/weather";
+import { getStoredAuthToken } from "../utils/authToken";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://sw-alb-v7-1940911359.ap-southeast-1.elb.amazonaws.com";
 const RATE_LIMIT_MESSAGE =
@@ -17,7 +20,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const pendingRequest = pendingRequests.get(requestKey);
   if (pendingRequest) return pendingRequest as Promise<T>;
 
-  const token = window.localStorage.getItem("student_weather_token");
+  const token = getStoredAuthToken();
   const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
 
   const requestPromise = fetch(`${API_BASE_URL}${path}`, {
@@ -106,6 +109,29 @@ function buildLocationParams(source: LocationQuery): URLSearchParams {
 
 export function searchLocations(query: string): Promise<SearchLocationCandidate[]> {
   return requestJson<SearchLocationCandidate[]>(`/api/v1/weather/search-location?query=${encodeURIComponent(query)}`);
+}
+
+export function createLocalWeatherReport(payload: LocalWeatherReportPayload): Promise<LocalWeatherReportResponse> {
+  return requestJson<LocalWeatherReportResponse>("/api/v1/weather/local-report", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getActiveLocalWeatherReport(source?: LocationQuery): Promise<LocalWeatherReportResponse | null> {
+  const params = source && (source.mode === "current" || source.mode === "confirmed")
+    ? `?${new URLSearchParams({
+        latitude: String(source.latitude),
+        longitude: String(source.longitude),
+      })}`
+    : "";
+  return requestJson<LocalWeatherReportResponse | null>(`/api/v1/weather/local-report/active${params}`);
+}
+
+export function clearActiveLocalWeatherReport(): Promise<{ cleared: boolean }> {
+  return requestJson<{ cleared: boolean }>("/api/v1/weather/local-report/active", {
+    method: "DELETE",
+  });
 }
 
 import type { SearchLocationCandidate } from "../types/weather";

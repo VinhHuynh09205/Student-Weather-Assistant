@@ -7,6 +7,8 @@ import type {
   VehicleType,
 } from "../types/weather";
 import * as userApi from "../api/userApi";
+import { clearStoredAuthToken, getStoredAuthToken, replaceStoredAuthToken, storeAuthToken } from "../utils/authToken";
+import { normalizeVehicleType } from "../utils/formatters";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://sw-alb-v7-1940911359.ap-southeast-1.elb.amazonaws.com";
 
@@ -55,7 +57,7 @@ interface AuthContextType {
   editSchedule: (id: string, sched: Partial<StudyScheduleResponse>) => Promise<void>;
   removeSchedule: (id: string) => Promise<void>;
 
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string, rememberLogin?: boolean) => Promise<void>;
   register: (username: string, password: string, confirmPassword: string, fullName: string) => Promise<void>;
   loginGoogle: (idToken: string) => Promise<void>;
   logout: () => void;
@@ -70,7 +72,7 @@ const defaultSettings: UserSettingsResponse = {
   temperature_unit: "celsius",
   theme_mode: "auto",
   auto_refresh_enabled: true,
-  notification_enabled: true,
+  notification_enabled: false,
   default_vehicle_type: "motorbike",
   default_location_id: null,
   created_at: "",
@@ -80,7 +82,7 @@ const defaultSettings: UserSettingsResponse = {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(
-    localStorage.getItem("student_weather_token")
+    getStoredAuthToken()
   );
   const [isLoading, setIsLoading] = useState(true);
 
@@ -115,7 +117,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const local = localStorage.getItem("student_weather_saved_schedules");
     if (local) {
       try {
-        return JSON.parse(local);
+        return normalizeSchedules(JSON.parse(local));
       } catch {
         return [];
       }
@@ -127,7 +129,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const local = localStorage.getItem("student_weather_upcoming_schedule");
     if (local) {
       try {
-        return JSON.parse(local);
+        return normalizeSchedule(JSON.parse(local));
       } catch {
         return null;
       }
@@ -137,7 +139,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Fetch functions for authenticated user
   const fetchLocations = async () => {
-    const token = localStorage.getItem("student_weather_token");
+    const token = getStoredAuthToken();
     if (!token) return;
     try {
       const list = await userApi.getUserLocations();
@@ -148,29 +150,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const fetchSchedules = async () => {
-    const token = localStorage.getItem("student_weather_token");
+    const token = getStoredAuthToken();
     if (!token) return;
     try {
       const list = await userApi.getUserSchedules();
-      setSchedules(list);
+      setSchedules(normalizeSchedules(list));
     } catch (e) {
       console.error("Failed to fetch schedules:", e);
     }
   };
 
   const fetchUpcoming = async () => {
-    const token = localStorage.getItem("student_weather_token");
+    const token = getStoredAuthToken();
     if (!token) return;
     try {
       const up = await userApi.getUpcomingSchedule();
-      setUpcomingSchedule(up);
+      setUpcomingSchedule(normalizeSchedule(up));
     } catch (e) {
       console.error("Failed to fetch upcoming schedule:", e);
     }
   };
 
   const fetchSettings = async () => {
-    const token = localStorage.getItem("student_weather_token");
+    const token = getStoredAuthToken();
     if (!token) return;
     try {
       const s = await userApi.getUserSettings();
@@ -211,7 +213,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const initAuth = async () => {
-      const token = localStorage.getItem("student_weather_token");
+      const token = getStoredAuthToken();
       if (token) {
         setAccessToken(token);
         await fetchCurrentUser(token);
@@ -232,12 +234,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${localStorage.getItem("student_weather_token")}`,
+            Authorization: `Bearer ${getStoredAuthToken()}`,
           },
         });
         if (resp.ok) {
           const data = await resp.json();
-          localStorage.setItem("student_weather_token", data.access_token);
+          replaceStoredAuthToken(data.access_token);
           setAccessToken(data.access_token);
         }
       } catch {
@@ -250,18 +252,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(interval);
   }, [currentUser, accessToken]);
 
-  const login = async (username: string, password: string) => {
+  const login = async (username: string, password: string, rememberLogin = false) => {
     const resp = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, remember_me: rememberLogin }),
     });
     if (!resp.ok) {
       const err = await resp.json();
       throw new Error(err.detail || "Đăng nhập thất bại.");
     }
     const data = await resp.json();
-    localStorage.setItem("student_weather_token", data.access_token);
+    storeAuthToken(data.access_token, rememberLogin);
     setAccessToken(data.access_token);
     await fetchCurrentUser(data.access_token);
   };
@@ -290,13 +292,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error(err.detail || "Xác thực Google thất bại.");
     }
     const data = await resp.json();
-    localStorage.setItem("student_weather_token", data.access_token);
+    storeAuthToken(data.access_token, true);
     setAccessToken(data.access_token);
     await fetchCurrentUser(data.access_token);
   };
 
   const logout = () => {
-    localStorage.removeItem("student_weather_token");
+    clearStoredAuthToken();
     setAccessToken(null);
     setCurrentUser(null);
     
@@ -397,6 +399,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   // Schedules Actions
+  type SchedulePayload = {
+    title: string;
+    study_date?: string | null;
+    start_time: string;
+    end_time: string;
+    vehicle_type: VehicleType;
+    location_id?: string | null;
+    repeat_type: string;
+    repeat_days?: string[] | null;
+    note?: string | null;
+    is_active?: boolean;
+  };
+
   const addSchedule = async (sched: {
     title: string;
     study_date?: string | null;
@@ -409,24 +424,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     note?: string | null;
     is_active?: boolean;
   }) => {
+    const normalizedSched: SchedulePayload = {
+      ...sched,
+      vehicle_type: normalizeVehicleType(sched.vehicle_type),
+    };
     if (currentUser) {
-      await userApi.createStudySchedule(sched);
+      await userApi.createStudySchedule(normalizedSched);
       await fetchSchedules();
       await fetchUpcoming();
     } else {
       const newSched: StudyScheduleResponse = {
         id: Math.random().toString(),
         user_id: "",
-        title: sched.title,
-        study_date: sched.study_date ?? null,
-        start_time: sched.start_time,
-        end_time: sched.end_time,
-        vehicle_type: sched.vehicle_type,
-        location_id: sched.location_id ?? null,
-        repeat_type: sched.repeat_type,
-        repeat_days: sched.repeat_days ?? null,
-        note: sched.note ?? null,
-        is_active: sched.is_active ?? true,
+        title: normalizedSched.title,
+        study_date: normalizedSched.study_date ?? null,
+        start_time: normalizedSched.start_time,
+        end_time: normalizedSched.end_time,
+        vehicle_type: normalizedSched.vehicle_type,
+        location_id: normalizedSched.location_id ?? null,
+        repeat_type: normalizedSched.repeat_type,
+        repeat_days: normalizedSched.repeat_days ?? null,
+        note: normalizedSched.note ?? null,
+        is_active: normalizedSched.is_active ?? true,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
@@ -446,13 +465,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await fetchSchedules();
       await fetchUpcoming();
     } else {
-      const nextScheds = schedules.map(s => s.id === id ? { ...s, ...sched, updated_at: new Date().toISOString() } : s);
+      const normalizedPatch =
+        sched.vehicle_type !== undefined ? { ...sched, vehicle_type: normalizeVehicleType(sched.vehicle_type) } : sched;
+      const nextScheds = schedules.map(s =>
+        s.id === id ? normalizeSchedule({ ...s, ...normalizedPatch, updated_at: new Date().toISOString() }) as StudyScheduleResponse : s,
+      );
       setSchedules(nextScheds);
       localStorage.setItem("student_weather_saved_schedules", JSON.stringify(nextScheds));
       
       // Update local upcoming if matches
       if (upcomingSchedule?.id === id) {
-        const updatedUpcoming = { ...upcomingSchedule, ...sched };
+        const updatedUpcoming = normalizeSchedule({ ...upcomingSchedule, ...normalizedPatch }) as StudyScheduleResponse;
         setUpcomingSchedule(updatedUpcoming);
         localStorage.setItem("student_weather_upcoming_schedule", JSON.stringify(updatedUpcoming));
       }
@@ -477,7 +500,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const syncLocalData = async () => {
-    const token = localStorage.getItem("student_weather_token");
+    const token = getStoredAuthToken();
     if (!token) return;
 
     // Sync Locations
@@ -535,7 +558,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             study_date: sched.study_date,
             start_time: sched.start_time,
             end_time: sched.end_time,
-            vehicle_type: sched.vehicle_type,
+            vehicle_type: normalizeVehicleType(sched.vehicle_type),
             repeat_type: sched.repeat_type || "none",
             repeat_days: sched.repeat_days,
             note: sched.note,
@@ -558,7 +581,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             study_date: parsed.study_date || null,
             start_time: parsed.start_time,
             end_time: parsed.end_time,
-            vehicle_type: parsed.vehicle_type || "motorbike",
+            vehicle_type: normalizeVehicleType(parsed.vehicle_type),
             repeat_type: parsed.repeat_type || "none",
             repeat_days: parsed.repeat_days || null,
             note: parsed.note || null,
@@ -626,4 +649,16 @@ export function useAuth() {
     throw new Error("useAuth must be used within an AuthProvider");
   }
   return context;
+}
+
+function normalizeSchedule(schedule: StudyScheduleResponse | null): StudyScheduleResponse | null {
+  if (!schedule) return null;
+  return {
+    ...schedule,
+    vehicle_type: normalizeVehicleType(schedule.vehicle_type),
+  };
+}
+
+function normalizeSchedules(schedulesToNormalize: StudyScheduleResponse[]): StudyScheduleResponse[] {
+  return schedulesToNormalize.map((schedule) => normalizeSchedule(schedule) as StudyScheduleResponse);
 }

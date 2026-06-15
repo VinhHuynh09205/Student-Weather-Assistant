@@ -25,22 +25,30 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return False
 
 
-def create_access_token(subject: str | Any, expires_delta: timedelta | None = None) -> str:
+def create_access_token(
+    subject: str | Any,
+    expires_delta: timedelta | None = None,
+    extra_claims: dict[str, Any] | None = None,
+) -> str:
     """Create a JWT access token for a user ID (subject)."""
     if expires_delta:
         expire = datetime.now(UTC) + expires_delta
     else:
         expire = datetime.now(UTC) + timedelta(minutes=settings.access_token_expire_minutes)
 
-    to_encode = {"exp": expire, "sub": str(subject)}
+    to_encode = {"exp": expire, "sub": str(subject), **(extra_claims or {})}
     encoded_jwt = jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
     return encoded_jwt
 
 
-def create_long_lived_access_token(subject: str | Any, days: int = 7) -> str:
+def create_long_lived_access_token(
+    subject: str | Any,
+    days: int = 7,
+    extra_claims: dict[str, Any] | None = None,
+) -> str:
     """Create a long-lived JWT token for persistent login (e.g. Google users)."""
     expire = datetime.now(UTC) + timedelta(days=days)
-    to_encode = {"exp": expire, "sub": str(subject)}
+    to_encode = {"exp": expire, "sub": str(subject), **(extra_claims or {})}
     return jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 

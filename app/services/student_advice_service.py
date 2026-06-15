@@ -16,11 +16,13 @@ from app.models.domain import (
     AdviceMetrics,
     BeforeAfterClassTimeline,
     DuringClassTimeline,
+    LocalWeatherOverride,
     StudentAdviceReport,
     StudyTimeline,
     WeatherSnapshot,
 )
 from app.schemas.advice import StudentAdviceRequest
+from app.services.local_weather_report_service import apply_local_weather_override_to_hourly, derive_condition
 from app.services.weather_cache import (
     AsyncTTLCache,
     normalize_city_for_cache,
@@ -39,19 +41,29 @@ class StudentAdviceService:
         self._weather_service = weather_service
         self._cache = cache
 
-    async def get_student_advice(self, request: StudentAdviceRequest) -> StudentAdviceReport:
+    async def get_student_advice(
+        self,
+        request: StudentAdviceRequest,
+        *,
+        local_override: LocalWeatherOverride | None = None,
+    ) -> StudentAdviceReport:
         provider_name = "open_meteo"
         if hasattr(self._weather_service, "active_provider"):
             provider_name = self._weather_service.active_provider.name
         if self._cache is not None:
             return await self._cache.get_or_create(
-                _build_student_advice_cache_key(request, provider_name),
+                _build_student_advice_cache_key(request, provider_name, local_override),
                 ttl_seconds=STUDENT_ADVICE_TTL_SECONDS,
-                factory=lambda: self._build_student_advice(request),
+                factory=lambda: self._build_student_advice(request, local_override=local_override),
             )
-        return await self._build_student_advice(request)
+        return await self._build_student_advice(request, local_override=local_override)
 
-    async def _build_student_advice(self, request: StudentAdviceRequest) -> StudentAdviceReport:
+    async def _build_student_advice(
+        self,
+        request: StudentAdviceRequest,
+        *,
+        local_override: LocalWeatherOverride | None = None,
+    ) -> StudentAdviceReport:
         if request.has_coordinates:
             if request.latitude is None or request.longitude is None:
                 raise InvalidWeatherDataError("Thiếu tọa độ để lấy dự báo thời tiết.")
@@ -65,7 +77,14 @@ class StudentAdviceService:
             if request.city is None:
                 raise InvalidWeatherDataError("Thiếu tên thành phố để lấy dự báo thời tiết.")
             forecast_report = await self._weather_service.get_hourly_forecast(request.city, hours=72)
+        provider_forecast_report = forecast_report
+        forecast_report = apply_local_weather_override_to_hourly(forecast_report, local_override)
         start_at, end_at = self._build_schedule_window(request)
+        provider_schedule_forecasts = self._select_schedule_forecasts(
+            provider_forecast_report.hourly,
+            start_at=start_at,
+            end_at=end_at,
+        )
         schedule_forecasts = self._select_schedule_forecasts(
             forecast_report.hourly,
             start_at=start_at,
@@ -83,6 +102,7 @@ class StudentAdviceService:
         metrics = self._calculate_metrics(schedule_forecasts)
         score = self._calculate_score(metrics)
         representative = self._pick_representative_forecast(schedule_forecasts)
+        provider_representative = self._pick_representative_forecast(provider_schedule_forecasts)
         timeline = self._build_timeline(
             before_class=before_class,
             schedule_forecasts=schedule_forecasts,
@@ -125,11 +145,13 @@ class StudentAdviceService:
                 score=score,
                 before_class=before_class,
                 after_class=after_class,
+                local_override=local_override,
             ),
             warnings=self._build_warnings(
                 metrics=metrics,
                 before_class=before_class,
                 after_class=after_class,
+                local_override=local_override,
             ),
             hourly_forecast=[self._to_advice_hourly_forecast(item) for item in schedule_forecasts],
             weather_code=representative.weather_code,
@@ -139,6 +161,14 @@ class StudentAdviceService:
             wind_speed_kmh=representative.wind_speed_kmh,
             precipitation_probability_percent=metrics.max_precipitation_probability_percent,
             temperature_c=metrics.max_temperature_c,
+            provider_condition=derive_condition(provider_representative),
+            effective_condition=(
+                local_override.reported_condition if local_override else derive_condition(representative)
+            ),
+            override_source=local_override.source if local_override else None,
+            override_expires_at=local_override.expires_at if local_override else None,
+            override_report_id=local_override.id if local_override else None,
+            override_intensity=local_override.intensity if local_override else None,
         )
 
     def _build_schedule_window(self, request: StudentAdviceRequest) -> tuple[datetime, datetime]:
@@ -298,8 +328,10 @@ class StudentAdviceService:
         score: int,
         before_class: WeatherSnapshot,
         after_class: WeatherSnapshot,
+        local_override: LocalWeatherOverride | None = None,
     ) -> list[str]:
         recommendations: list[str] = []
+        local_rain = local_override is not None and local_override.reported_condition in {"rain", "storm"}
         before_rain = self._rain_probability(before_class) >= RAIN_PROBABILITY_MEDIUM
         after_rain = self._rain_probability(after_class) >= RAIN_PROBABILITY_MEDIUM
         rain_risk = (
@@ -308,7 +340,12 @@ class StudentAdviceService:
         strong_wind = metrics.max_wind_speed_kmh >= WIND_SPEED_STRONG_KMH
         hot_weather = metrics.max_apparent_temperature_c >= APPARENT_TEMPERATURE_HOT_C
 
-        if before_rain:
+        if local_rain:
+            recommendations.append(
+                "Theo xác nhận thời tiết tại chỗ của bạn, khu vực đang mưa. "
+                "Hãy ưu tiên chuẩn bị đồ chống mưa."
+            )
+        elif before_rain:
             recommendations.append("Nên đi sớm hơn và mang áo mưa trước khi đến lớp.")
         elif rain_risk:
             recommendations.append("Nên mang áo mưa hoặc dù.")
@@ -319,21 +356,70 @@ class StudentAdviceService:
         if hot_weather or metrics.max_uv_index >= UV_INDEX_HIGH:
             recommendations.append("Nên mang nước uống, nón hoặc áo khoác nhẹ.")
 
-        if vehicle_type == "motorbike" and (rain_risk or strong_wind):
-            recommendations.append("Đi xe máy nên đi sớm 10-15 phút và chạy xe cẩn thận.")
-        elif vehicle_type == "bicycle" and (rain_risk or strong_wind):
-            recommendations.append("Đi xe đạp nên tránh đường trơn và chú ý gió mạnh.")
-        elif vehicle_type == "walking" and rain_risk:
-            recommendations.append("Đi bộ nên mang dù và chọn tuyến đường có mái che nếu có.")
-        elif vehicle_type == "walking" and hot_weather:
-            recommendations.append("Đi bộ nên tránh nắng lâu và mang thêm nước.")
-        elif vehicle_type == "bus" and rain_risk:
-            recommendations.append("Đi xe buýt nên ra trạm sớm hơn để tránh mưa và trễ chuyến.")
+        vehicle_recommendation = self._build_vehicle_recommendation(
+            vehicle_type=vehicle_type,
+            rain_risk=rain_risk or local_rain,
+            strong_wind=strong_wind,
+            hot_weather=hot_weather,
+            storm_risk=(
+                local_override.reported_condition == "storm"
+                if local_override
+                else metrics.max_precipitation_probability_percent >= RAIN_PROBABILITY_HIGH and strong_wind
+            ),
+        )
+        if vehicle_recommendation:
+            recommendations.append(vehicle_recommendation)
 
         if score >= 80:
             recommendations.append("Thời tiết khá thuận lợi cho buổi học của bạn.")
 
         return list(dict.fromkeys(recommendations))
+
+    def _build_vehicle_recommendation(
+        self,
+        *,
+        vehicle_type: str,
+        rain_risk: bool,
+        strong_wind: bool,
+        hot_weather: bool,
+        storm_risk: bool,
+    ) -> str:
+        if vehicle_type == "motorbike":
+            if storm_risk:
+                return "Đi xe máy nên đi sớm, mang áo mưa, chạy chậm và tránh dông gió mạnh."
+            if rain_risk or strong_wind:
+                return "Đi xe máy nên đi sớm 10-15 phút, mang áo mưa và chú ý đường trơn, gió mạnh, tầm nhìn kém."
+            return "Đi xe máy khá thuận tiện, vẫn nên kiểm tra áo mưa mỏng và tình trạng đường trước khi đi."
+
+        if vehicle_type == "walking":
+            if storm_risk:
+                return "Đi bộ nên tránh mưa lớn hoặc dông, ưu tiên lối có mái che và chờ thời tiết dịu hơn."
+            if rain_risk:
+                return "Đi bộ nên mang dù, đi giày chống trượt và chọn tuyến đường có mái che nếu có."
+            if hot_weather:
+                return "Đi bộ nên tránh nắng lâu và mang thêm nước."
+            return "Đi bộ phù hợp nếu quãng đường ngắn, nên chọn tuyến an toàn và đủ ánh sáng."
+
+        if vehicle_type == "bus":
+            if rain_risk or storm_risk:
+                return "Đi xe buýt nên ra trạm sớm, kiểm tra thời gian chờ và chuẩn bị áo mưa cho đoạn đi bộ."
+            return "Đi xe buýt nên kiểm tra lịch chuyến và ra trạm sớm vài phút để tránh lỡ xe."
+
+        if vehicle_type == "car":
+            if storm_risk:
+                return "Đi ô tô cần lái chậm, bật đèn, giữ khoảng cách vì mưa dông làm giảm tầm nhìn."
+            if rain_risk or strong_wind:
+                return "Đi ô tô nên chú ý tầm nhìn, đường ngập, kẹt xe và lái chậm khi mưa hoặc gió mạnh."
+            return "Đi ô tô khá an toàn, vẫn nên tính thêm thời gian nếu tuyến đường dễ kẹt xe."
+
+        if vehicle_type == "bicycle":
+            if storm_risk:
+                return "Đi xe đạp không nên di chuyển khi có dông hoặc gió mạnh, hãy cân nhắc phương tiện khác."
+            if rain_risk or strong_wind:
+                return "Đi xe đạp nên dùng áo mưa gọn, tránh đường trơn và rất cẩn thận khi gió mạnh."
+            return "Đi xe đạp thuận lợi nếu đường khô ráo, nên mang áo mưa gọn để dự phòng."
+
+        return "Hãy kiểm tra thời tiết sát giờ đi học để chọn phương tiện phù hợp."
 
     def _build_warnings(
         self,
@@ -341,8 +427,14 @@ class StudentAdviceService:
         metrics: AdviceMetrics,
         before_class: WeatherSnapshot,
         after_class: WeatherSnapshot,
+        local_override: LocalWeatherOverride | None = None,
     ) -> list[str]:
         warnings: list[str] = []
+
+        if local_override is not None and local_override.reported_condition == "rain":
+            warnings.append("Mưa cục bộ theo xác nhận tại chỗ của bạn.")
+        elif local_override is not None and local_override.reported_condition == "storm":
+            warnings.append("Dông/sấm sét theo xác nhận tại chỗ của bạn.")
 
         if self._rain_probability(before_class) >= RAIN_PROBABILITY_MEDIUM:
             warnings.append("Có khả năng mưa trước giờ học.")
@@ -442,7 +534,11 @@ class StudentAdviceService:
         return value.strftime("%H:%M")
 
 
-def _build_student_advice_cache_key(request: StudentAdviceRequest, provider_name: str) -> tuple[object, ...]:
+def _build_student_advice_cache_key(
+    request: StudentAdviceRequest,
+    provider_name: str,
+    local_override: LocalWeatherOverride | None = None,
+) -> tuple[object, ...]:
     if request.has_coordinates:
         location_key: tuple[object, ...] = (
             "coordinates",
@@ -461,4 +557,18 @@ def _build_student_advice_cache_key(request: StudentAdviceRequest, provider_name
         request.end_time.strftime("%H:%M") if request.end_time else "",
         request.vehicle_type,
         provider_name,
+        _build_local_override_cache_key(local_override),
+    )
+
+
+def _build_local_override_cache_key(local_override: LocalWeatherOverride | None) -> str:
+    if local_override is None:
+        return "no-local-override"
+    return ":".join(
+        [
+            local_override.id,
+            local_override.reported_condition,
+            local_override.intensity or "",
+            local_override.expires_at.isoformat(),
+        ]
     )

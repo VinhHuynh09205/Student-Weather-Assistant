@@ -489,6 +489,30 @@ def test_student_advice_endpoint_accepts_brvt_alias() -> None:
     assert response.json()["city"] == "brvt"
 
 
+def test_student_advice_endpoint_preserves_car_vehicle_type() -> None:
+    app.dependency_overrides[get_weather_service] = lambda: FakeWeatherService()
+    client = TestClient(app)
+
+    try:
+        response = client.post(
+            "/api/v1/weather/student-advice",
+            json={
+                "city": "Can Tho",
+                "study_date": "2026-06-05",
+                "start_time": "10:00",
+                "end_time": "12:00",
+                "vehicle_type": "car",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["vehicle_type"] == "car"
+    assert any("ô tô" in item for item in data["recommendations"])
+
+
 def test_student_advice_endpoint_rejects_invalid_time_range() -> None:
     client = TestClient(app)
 

@@ -16,7 +16,7 @@ import type {
   VehicleType,
   StudyScheduleResponse,
 } from "../types/weather";
-import { formatPercent, formatTemperature, formatWind, formatScheduleRange, vehicleLabels } from "../utils/formatters";
+import { formatPercent, formatTemperature, formatWind, formatScheduleRange, getVehicleLabel } from "../utils/formatters";
 import { useAuth } from "../context/AuthContext";
 
 type StudyAssistantPageProps = {
@@ -160,7 +160,7 @@ export function StudyAssistantPage({
                           {sched.title}
                         </strong>
                         <span style={{ fontSize: "0.75rem", color: "rgba(255, 255, 255, 0.6)" }}>
-                          {formatScheduleRange(sched.study_date || undefined, sched.start_time, sched.end_time)} · {vehicleLabels[sched.vehicle_type]}
+                          {formatScheduleRange(sched.study_date || undefined, sched.start_time, sched.end_time)} · {getVehicleLabel(sched.vehicle_type)}
                         </span>
                         <span style={{ fontSize: "0.7rem", color: "rgba(255, 255, 255, 0.4)" }}>
                           📍 {locationLabel}

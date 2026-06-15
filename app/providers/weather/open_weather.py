@@ -260,12 +260,20 @@ def _map_owm_code_to_wmo(owm_id: int) -> int:
         return 95  # Thunderstorm
     elif 300 <= owm_id <= 399:
         return 51  # Drizzle
-    elif 500 <= owm_id <= 504:
-        return 61  # Light/moderate rain
+    elif owm_id == 500:
+        return 61  # Slight rain
+    elif owm_id == 501:
+        return 63  # Moderate rain
+    elif 502 <= owm_id <= 504:
+        return 65  # Heavy rain
     elif owm_id == 511:
         return 66  # Freezing rain
-    elif 520 <= owm_id <= 531:
-        return 80  # Rain showers
+    elif owm_id == 520:
+        return 80  # Slight rain showers
+    elif owm_id == 521:
+        return 81  # Rain showers
+    elif owm_id in (522, 531):
+        return 82  # Heavy/ragged rain showers
     elif 600 <= owm_id <= 699:
         return 71  # Snow
     elif 701 <= owm_id <= 781:
