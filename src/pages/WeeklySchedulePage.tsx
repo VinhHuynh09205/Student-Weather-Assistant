@@ -14,6 +14,7 @@ import type { ReactNode } from "react";
 import * as classScheduleApi from "../api/classScheduleApi";
 import { ErrorState } from "../components/common/ErrorState";
 import { LoadingState } from "../components/common/LoadingState";
+import { WeeklyForecastDetailModal } from "../components/classSchedule/WeeklyForecastDetailModal";
 import { UpcomingForecastList } from "../components/classSchedule/UpcomingForecastList";
 import { WeeklyScheduleCard } from "../components/classSchedule/WeeklyScheduleCard";
 import { WeeklyScheduleForm } from "../components/classSchedule/WeeklyScheduleForm";
@@ -45,6 +46,10 @@ export function WeeklySchedulePage({ currentWeather, locationName, onOpenLogin }
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [busyScheduleId, setBusyScheduleId] = useState<string | null>(null);
   const [flashMessage, setFlashMessage] = useState<string | null>(null);
+  const [detailTarget, setDetailTarget] = useState<{
+    forecast?: ClassScheduleForecast;
+    schedule: WeeklyClassSchedule;
+  } | null>(null);
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scheduleListRef = useRef<HTMLDivElement>(null);
 
@@ -231,6 +236,10 @@ export function WeeklySchedulePage({ currentWeather, locationName, onOpenLogin }
     }
   };
 
+  const handleViewDetails = (forecast: ClassScheduleForecast | undefined, schedule: WeeklyClassSchedule) => {
+    setDetailTarget({ forecast, schedule });
+  };
+
   const showFlash = (message: string, toastTitle = "Đã cập nhật") => {
     setFlashMessage(message);
     showSuccessToast(toastTitle, message);
@@ -357,6 +366,7 @@ export function WeeklySchedulePage({ currentWeather, locationName, onOpenLogin }
                   onDelete={handleDelete}
                   onEdit={openEditForm}
                   onToggleActive={handleToggleActive}
+                  onViewDetails={handleViewDetails}
                 />
               ))}
             </div>
@@ -391,6 +401,14 @@ export function WeeklySchedulePage({ currentWeather, locationName, onOpenLogin }
             />
           </div>
         </div>
+      ) : null}
+
+      {detailTarget ? (
+        <WeeklyForecastDetailModal
+          forecast={detailTarget.forecast}
+          schedule={detailTarget.schedule}
+          onClose={() => setDetailTarget(null)}
+        />
       ) : null}
     </section>
   );

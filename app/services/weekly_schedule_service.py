@@ -21,6 +21,7 @@ class WeeklyScheduleService:
             day_of_week=payload.day_of_week,
             start_time=payload.start_time,
             end_time=payload.end_time,
+            vehicle_type=payload.vehicle_type,
             location_name=payload.location_name,
             latitude=payload.latitude,
             longitude=payload.longitude,

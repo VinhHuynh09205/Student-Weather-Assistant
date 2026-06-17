@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -9,7 +9,7 @@ from app.api.v1.endpoints.class_schedules import get_class_schedule_forecast_ser
 from app.db.models import Notification, User, UserSettings, WeeklyClassSchedule
 from app.db.session import async_session, engine
 from app.main import app
-from app.models.domain import HourlyForecastReport, Location, WeatherSnapshot
+from app.models.domain import HourlyForecastReport, LocalWeatherOverride, Location, WeatherSnapshot
 from app.services.class_schedule_forecast_service import ClassScheduleForecastService
 from app.services.schedule_occurrence_service import ScheduleOccurrenceService
 
@@ -101,6 +101,7 @@ def make_schedule(**overrides) -> WeeklyClassSchedule:
         "day_of_week": 0,
         "start_time": time(7, 0),
         "end_time": time(9, 30),
+        "vehicle_type": "motorbike",
         "location_name": "Campus",
         "latitude": 10.3419,
         "longitude": 106.1223,
@@ -134,7 +135,7 @@ def make_snapshot(
         precipitation_mm=rain_mm,
         rain_mm=rain_mm,
         weather_code=code,
-        weather_description="Dong" if code == 95 else "Mua" if code in {61, 63, 65} else "Nhieu may",
+        weather_description="Dông" if code == 95 else "Mưa" if code in {61, 63, 65} else "Nhiều mây",
         wind_speed_kmh=wind,
         uv_index=0.0,
         is_day=True,
@@ -315,6 +316,56 @@ async def test_upcoming_forecasts_ignore_soft_deleted_weekly_schedule(clean_week
 
 
 @pytest.mark.anyio
+async def test_upcoming_forecasts_response_includes_detailed_advice_fields(clean_weekly_schedule_data):
+    start_at = datetime.now().replace(second=0, microsecond=0) + timedelta(hours=1)
+    end_at = start_at + timedelta(hours=2)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        headers = await register_and_login(client, "weekly_detail_fields_user")
+        create_response = await client.post(
+            "/api/v1/class-schedules",
+            headers=headers,
+            json={
+                "subject_name": "Trí tuệ nhân tạo",
+                "day_of_week": start_at.weekday(),
+                "start_time": start_at.strftime("%H:%M"),
+                "end_time": end_at.strftime("%H:%M"),
+                "vehicle_type": "bus",
+                "location_name": "Đại học Giao thông Vận tải",
+                "latitude": 10.8452193,
+                "longitude": 106.7939485,
+            },
+        )
+        assert create_response.status_code == 201
+
+        app.dependency_overrides[get_class_schedule_forecast_service] = lambda: ClassScheduleForecastService(
+            FakeWeatherService(
+                [make_snapshot(start_at.strftime("%Y-%m-%dT%H:%M"), code=61, probability=80, rain_mm=1.2)]
+            )
+        )
+        try:
+            forecast_response = await client.get("/api/v1/class-schedules/upcoming-forecasts?limit=5", headers=headers)
+        finally:
+            app.dependency_overrides.pop(get_class_schedule_forecast_service, None)
+
+    assert forecast_response.status_code == 200
+    [forecast] = forecast_response.json()
+    assert forecast["schedule"]["subject_name"] == "Trí tuệ nhân tạo"
+    assert forecast["vehicle_type"] == "bus"
+    assert forecast["study_score"] is not None
+    assert forecast["commute_score"] == forecast["study_score"]
+    assert forecast["score_label"]
+    assert "Trí tuệ nhân tạo" in forecast["summary_message"]
+    assert forecast["weather_warning"]
+    assert "xe buýt" in forecast["commute_advice"].lower()
+    assert forecast["preparation_items"]
+    assert forecast["reason_factors"]
+    assert forecast["timeline_advice"]["before_class"]
+    assert forecast["provider_condition"] in {"rain", "cloudy", "clear", "storm"}
+    assert forecast["effective_condition"] in {"rain", "cloudy", "clear", "storm"}
+
+
+@pytest.mark.anyio
 async def test_create_weekly_schedule_with_manual_location_without_coordinates(clean_weekly_schedule_data):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         headers = await register_and_login(client, "weekly_manual_location_user")
@@ -426,6 +477,95 @@ async def test_forecast_available_when_occurrence_is_in_supported_range():
     assert result.forecast_status == "available"
     assert result.risk_level == "PREPARE"
     assert weather.coordinate_calls == 1
+    assert result.advice_detail is not None
+    assert result.advice_detail.study_score < 100
+    assert result.advice_detail.score_label
+    assert result.advice_detail.summary_message.startswith("Buổi học Lap trinh Web")
+    assert result.advice_detail.weather_warning
+    assert result.advice_detail.commute_advice
+    assert result.advice_detail.preparation_items
+    assert result.advice_detail.reason_factors
+    assert result.advice_detail.timeline_advice.before_class
+    assert result.advice_detail.vehicle_type == "motorbike"
+
+
+@pytest.mark.anyio
+async def test_weekly_forecast_vehicle_advice_changes_by_vehicle_type():
+    now = datetime(2026, 6, 15, 6, 0)
+    weather = [make_snapshot("2026-06-15T07:00", code=61, probability=85, rain_mm=2.5)]
+    advice_by_vehicle: dict[str, str] = {}
+
+    for vehicle_type in ["motorbike", "walking", "bus", "car", "bicycle"]:
+        schedule = make_schedule(day_of_week=0, vehicle_type=vehicle_type)
+        service = ClassScheduleForecastService(FakeWeatherService(weather))  # type: ignore[arg-type]
+        result = await service.get_forecast_for_next_occurrence(schedule, now=now)
+
+        assert result.advice_detail is not None
+        assert result.advice_detail.vehicle_type == vehicle_type
+        advice_by_vehicle[vehicle_type] = result.advice_detail.commute_advice
+
+    assert len(set(advice_by_vehicle.values())) == 5
+    assert "xe máy" in advice_by_vehicle["motorbike"].lower()
+    assert "đi bộ" in advice_by_vehicle["walking"].lower()
+    assert "xe buýt" in advice_by_vehicle["bus"].lower()
+    assert "ô tô" in advice_by_vehicle["car"].lower()
+    assert "xe đạp" in advice_by_vehicle["bicycle"].lower()
+
+
+@pytest.mark.anyio
+async def test_local_weather_report_rain_overrides_weekly_advice_without_thunderstorm():
+    base_now = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+    start_at = base_now + timedelta(hours=1)
+    schedule = make_schedule(
+        day_of_week=start_at.weekday(),
+        start_time=start_at.time(),
+        end_time=(start_at + timedelta(hours=2)).time(),
+        vehicle_type="motorbike",
+    )
+    override = LocalWeatherOverride(
+        id="local-rain-report",
+        user_id=str(schedule.user_id),
+        location_name="Campus",
+        latitude=float(schedule.latitude),
+        longitude=float(schedule.longitude),
+        reported_condition="rain",
+        intensity="moderate",
+        source="user_report",
+        created_at=base_now - timedelta(minutes=5),
+        expires_at=base_now + timedelta(hours=2),
+    )
+    weather = FakeWeatherService(
+        [make_snapshot(start_at.strftime("%Y-%m-%dT%H:%M"), code=3, probability=10, rain_mm=0.0)]
+    )
+    service = ClassScheduleForecastService(weather)  # type: ignore[arg-type]
+
+    result = await service.get_forecast_for_next_occurrence(schedule, now=base_now, local_override=override)
+
+    assert result.forecast_status == "available"
+    assert result.weather_code in {61, 63, 65}
+    assert result.weather_code != 95
+    assert result.risk_level == "PREPARE"
+    assert result.advice_detail is not None
+    assert result.advice_detail.provider_condition == "cloudy"
+    assert result.advice_detail.effective_condition == "rain"
+    assert result.advice_detail.override_source == "user_report"
+    assert "xác nhận thời tiết tại chỗ" in result.advice_detail.summary_message
+    assert "dông" not in result.advice_detail.weather_warning.lower()
+
+
+@pytest.mark.anyio
+async def test_legacy_weekly_schedule_without_vehicle_type_uses_motorbike_default():
+    schedule = make_schedule(day_of_week=0)
+    schedule.vehicle_type = None  # type: ignore[assignment]
+    now = datetime(2026, 6, 15, 6, 0)
+    weather = FakeWeatherService([make_snapshot("2026-06-15T07:00", code=61, probability=80, rain_mm=1.0)])
+    service = ClassScheduleForecastService(weather)  # type: ignore[arg-type]
+
+    result = await service.get_forecast_for_next_occurrence(schedule, now=now)
+
+    assert result.advice_detail is not None
+    assert result.advice_detail.vehicle_type == "motorbike"
+    assert "xe máy" in result.advice_detail.commute_advice.lower()
 
 
 @pytest.mark.anyio
@@ -478,6 +618,11 @@ async def test_forecast_error_does_not_raise_and_prefers_coordinates():
     assert result.next_occurrence is not None
     assert result.risk_level == "SAFE"
     assert weather.coordinate_calls == 1
+    assert result.advice_detail is not None
+    assert result.advice_detail.summary_message == (
+        "Chưa thể tải dự báo cho buổi học này, nhưng lịch vẫn đã được lưu."
+    )
+    assert result.advice_detail.vehicle_type == "motorbike"
 
 
 @pytest.mark.anyio

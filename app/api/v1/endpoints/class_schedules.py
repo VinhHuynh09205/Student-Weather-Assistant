@@ -8,15 +8,18 @@ from app.api.v1.deps import get_current_user
 from app.api.v1.endpoints.weather import get_weather_service
 from app.db.models import User
 from app.db.session import get_db
+from app.models.domain import LocalWeatherOverride
 from app.schemas.weekly_class_schedule import (
     ClassScheduleForecastResponse,
     ClassScheduleOccurrenceResponse,
+    ClassScheduleTimelineAdviceResponse,
     DeleteWeeklyClassScheduleResponse,
     WeeklyClassScheduleCreate,
     WeeklyClassScheduleResponse,
     WeeklyClassScheduleUpdate,
 )
 from app.services.class_schedule_forecast_service import ClassScheduleForecastResult, ClassScheduleForecastService
+from app.services.local_weather_report_service import get_active_local_weather_report, to_local_weather_override
 from app.services.schedule_occurrence_service import ScheduleOccurrence
 from app.services.weather_service import WeatherService
 from app.services.weekly_schedule_service import WeeklyScheduleService
@@ -64,7 +67,15 @@ async def get_upcoming_forecasts(
 ):
     schedules = await schedule_service.list_weekly_schedules(db, current_user.id)
     active_schedules = [schedule for schedule in schedules if schedule.is_active]
-    forecasts = await forecast_service.get_upcoming_forecasts(active_schedules, limit=limit)
+    local_overrides = {
+        str(schedule.id): await _get_local_override_for_schedule(db, current_user, schedule)
+        for schedule in active_schedules
+    }
+    forecasts = await forecast_service.get_upcoming_forecasts(
+        active_schedules,
+        limit=limit,
+        local_overrides=local_overrides,
+    )
     return [_forecast_response(result) for result in forecasts]
 
 
@@ -126,12 +137,14 @@ async def get_next_forecast(
     schedule = await schedule_service.get_weekly_schedule(db, current_user, schedule_id)
     if schedule is None:
         raise _not_found()
-    forecast = await forecast_service.get_forecast_for_next_occurrence(schedule)
+    local_override = await _get_local_override_for_schedule(db, current_user, schedule)
+    forecast = await forecast_service.get_forecast_for_next_occurrence(schedule, local_override=local_override)
     return _forecast_response(forecast)
 
 
 def _forecast_response(result: ClassScheduleForecastResult) -> ClassScheduleForecastResponse:
     occurrence = _occurrence_response(result.next_occurrence)
+    advice = result.advice_detail
     return ClassScheduleForecastResponse(
         schedule=WeeklyClassScheduleResponse.model_validate(result.schedule),
         next_occurrence=occurrence,
@@ -145,6 +158,30 @@ def _forecast_response(result: ClassScheduleForecastResult) -> ClassScheduleFore
         rain_mm=result.rain_mm,
         wind_speed_kmh=result.wind_speed_kmh,
         provider=result.provider,
+        study_score=advice.study_score if advice else None,
+        commute_score=advice.study_score if advice else None,
+        score_label=advice.score_label if advice else None,
+        summary_message=advice.summary_message if advice else None,
+        weather_warning=advice.weather_warning if advice else None,
+        commute_advice=advice.commute_advice if advice else None,
+        preparation_items=advice.preparation_items if advice else [],
+        reason_factors=advice.reason_factors if advice else [],
+        timeline_advice=(
+            ClassScheduleTimelineAdviceResponse(
+                before_class=advice.timeline_advice.before_class,
+                during_class=advice.timeline_advice.during_class,
+                after_class=advice.timeline_advice.after_class,
+            )
+            if advice
+            else None
+        ),
+        vehicle_type=advice.vehicle_type if advice else result.schedule.vehicle_type,
+        provider_condition=advice.provider_condition if advice else None,
+        effective_condition=advice.effective_condition if advice else None,
+        override_source=advice.override_source if advice else None,
+        override_expires_at=advice.override_expires_at if advice else None,
+        override_report_id=advice.override_report_id if advice else None,
+        override_intensity=advice.override_intensity if advice else None,
     )
 
 
@@ -164,3 +201,15 @@ def _not_found() -> HTTPException:
         status_code=status.HTTP_404_NOT_FOUND,
         detail="Khong tim thay lich hoc hang tuan hoac ban khong co quyen truy cap.",
     )
+
+
+async def _get_local_override_for_schedule(db: AsyncSession, user: User, schedule) -> LocalWeatherOverride | None:
+    if schedule.latitude is None or schedule.longitude is None:
+        return None
+    report = await get_active_local_weather_report(
+        db,
+        user_id=user.id,
+        latitude=float(schedule.latitude),
+        longitude=float(schedule.longitude),
+    )
+    return to_local_weather_override(report)

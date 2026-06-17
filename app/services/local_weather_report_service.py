@@ -140,7 +140,7 @@ def apply_local_weather_override_to_hourly(
     *,
     now: datetime | None = None,
 ) -> HourlyForecastReport:
-    if override is None or override.expires_at <= datetime.utcnow():
+    if override is None or _as_naive_datetime(override.expires_at) <= datetime.utcnow():
         return report
 
     current_time = now or datetime.utcnow()
@@ -205,8 +205,17 @@ def _is_within_override_window(
     snapshot_time = _parse_weather_time(snapshot.time)
     if snapshot_time is None:
         return False
-    starts_at = max(override.created_at - LOCAL_REPORT_PAST_TOLERANCE, now - LOCAL_REPORT_PAST_TOLERANCE)
-    return starts_at <= snapshot_time <= override.expires_at
+    created_at = _as_naive_datetime(override.created_at)
+    expires_at = _as_naive_datetime(override.expires_at)
+    current_time = _as_naive_datetime(now)
+    starts_at = max(created_at - LOCAL_REPORT_PAST_TOLERANCE, current_time - LOCAL_REPORT_PAST_TOLERANCE)
+    return starts_at <= snapshot_time <= expires_at
+
+
+def _as_naive_datetime(value: datetime) -> datetime:
+    if value.tzinfo is not None:
+        return value.replace(tzinfo=None)
+    return value
 
 
 def _rain_code_for_intensity(intensity: str | None) -> int:

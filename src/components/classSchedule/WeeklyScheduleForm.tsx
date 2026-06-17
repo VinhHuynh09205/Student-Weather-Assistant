@@ -18,8 +18,9 @@ import type { FormEvent, ReactNode } from "react";
 
 import { searchLocations } from "../../api/weatherApi";
 import type { WeeklyClassSchedule, WeeklyClassSchedulePayload } from "../../types/classSchedule";
-import type { SearchLocationCandidate } from "../../types/weather";
+import type { SearchLocationCandidate, VehicleType } from "../../types/weather";
 import { normalizeTimeForInput } from "../../utils/classScheduleFormatters";
+import { normalizeVehicleType, vehicleOptions } from "../../utils/formatters";
 import { DatePickerField } from "./DatePickerField";
 import { DayOfWeekSelector } from "./DayOfWeekSelector";
 import { TimeRangeInput } from "./TimeRangeInput";
@@ -29,6 +30,7 @@ type WeeklyScheduleFormValues = {
   day_of_week: number;
   start_time: string;
   end_time: string;
+  vehicle_type: VehicleType;
   location_name: string;
   latitude: string;
   longitude: string;
@@ -66,6 +68,7 @@ const defaultValues: WeeklyScheduleFormValues = {
   day_of_week: 0,
   start_time: "07:00",
   end_time: "09:00",
+  vehicle_type: "motorbike",
   location_name: "",
   latitude: "",
   longitude: "",
@@ -280,6 +283,7 @@ export function WeeklyScheduleForm({
       location_name: current.location_name,
       latitude: current.latitude,
       longitude: current.longitude,
+      vehicle_type: current.vehicle_type,
       notify_before_minutes: current.notify_before_minutes,
       rain_alert_enabled: current.rain_alert_enabled,
       storm_alert_enabled: current.storm_alert_enabled,
@@ -348,6 +352,26 @@ export function WeeklyScheduleForm({
           onStartTimeChange={(value) => updateValue("start_time", value)}
           onEndTimeChange={(value) => updateValue("end_time", value)}
         />
+
+        <div className="class-form-group">
+          <span className="class-field-label">Phương tiện di chuyển</span>
+          <div className="class-vehicle-choice-grid" aria-label="Chọn phương tiện đi học">
+            {vehicleOptions.map((vehicle) => (
+              <button
+                key={vehicle.id}
+                className={values.vehicle_type === vehicle.id ? "selected" : ""}
+                type="button"
+                onClick={() => updateValue("vehicle_type", vehicle.id)}
+              >
+                <span>{vehicle.icon}</span>
+                {vehicle.label}
+              </button>
+            ))}
+          </div>
+          <span className="class-form-hint">
+            Hệ thống dùng phương tiện để gợi ý áo mưa, thời gian đi sớm, kẹt xe hoặc đường trơn phù hợp hơn.
+          </span>
+        </div>
       </div>
 
       <div className="class-form-section">
@@ -740,6 +764,7 @@ function getInitialValues(schedule: WeeklyClassSchedule | null): WeeklyScheduleF
     day_of_week: schedule.day_of_week,
     start_time: normalizeTimeForInput(schedule.start_time),
     end_time: normalizeTimeForInput(schedule.end_time),
+    vehicle_type: normalizeVehicleType(schedule.vehicle_type),
     location_name: schedule.location_name ?? "",
     latitude: typeof schedule.latitude === "number" ? String(schedule.latitude) : "",
     longitude: typeof schedule.longitude === "number" ? String(schedule.longitude) : "",
@@ -806,6 +831,7 @@ function toPayload(values: WeeklyScheduleFormValues): WeeklyClassSchedulePayload
     day_of_week: values.day_of_week,
     start_time: values.start_time,
     end_time: values.end_time,
+    vehicle_type: values.vehicle_type,
     location_name: values.location_name.trim(),
     latitude,
     longitude,

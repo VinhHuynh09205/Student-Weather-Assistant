@@ -95,6 +95,10 @@ class WeeklyClassSchedule(Base):
     __table_args__ = (
         CheckConstraint("day_of_week >= 0 AND day_of_week <= 6", name="ck_weekly_class_schedules_day_of_week"),
         CheckConstraint("notify_before_minutes >= 0", name="ck_weekly_class_schedules_notify_before_minutes"),
+        CheckConstraint(
+            "vehicle_type IN ('motorbike', 'walking', 'bus', 'car', 'bicycle')",
+            name="ck_weekly_class_schedules_vehicle_type",
+        ),
     )
 
     id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -103,6 +107,7 @@ class WeeklyClassSchedule(Base):
     day_of_week = Column(Integer, nullable=False)
     start_time = Column(Time, nullable=False)
     end_time = Column(Time, nullable=False)
+    vehicle_type = Column(String, default="motorbike", nullable=False)
     location_name = Column(String, nullable=True)
     latitude = Column(Float, nullable=True)
     longitude = Column(Float, nullable=True)

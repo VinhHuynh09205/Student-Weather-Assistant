@@ -22,6 +22,7 @@ from app.models.domain import (
     WeatherSnapshot,
 )
 from app.schemas.advice import StudentAdviceRequest
+from app.services.commute_advice_utils import build_vehicle_commute_advice
 from app.services.local_weather_report_service import apply_local_weather_override_to_hourly, derive_condition
 from app.services.weather_cache import (
     AsyncTTLCache,
@@ -384,42 +385,13 @@ class StudentAdviceService:
         hot_weather: bool,
         storm_risk: bool,
     ) -> str:
-        if vehicle_type == "motorbike":
-            if storm_risk:
-                return "Đi xe máy nên đi sớm, mang áo mưa, chạy chậm và tránh dông gió mạnh."
-            if rain_risk or strong_wind:
-                return "Đi xe máy nên đi sớm 10-15 phút, mang áo mưa và chú ý đường trơn, gió mạnh, tầm nhìn kém."
-            return "Đi xe máy khá thuận tiện, vẫn nên kiểm tra áo mưa mỏng và tình trạng đường trước khi đi."
-
-        if vehicle_type == "walking":
-            if storm_risk:
-                return "Đi bộ nên tránh mưa lớn hoặc dông, ưu tiên lối có mái che và chờ thời tiết dịu hơn."
-            if rain_risk:
-                return "Đi bộ nên mang dù, đi giày chống trượt và chọn tuyến đường có mái che nếu có."
-            if hot_weather:
-                return "Đi bộ nên tránh nắng lâu và mang thêm nước."
-            return "Đi bộ phù hợp nếu quãng đường ngắn, nên chọn tuyến an toàn và đủ ánh sáng."
-
-        if vehicle_type == "bus":
-            if rain_risk or storm_risk:
-                return "Đi xe buýt nên ra trạm sớm, kiểm tra thời gian chờ và chuẩn bị áo mưa cho đoạn đi bộ."
-            return "Đi xe buýt nên kiểm tra lịch chuyến và ra trạm sớm vài phút để tránh lỡ xe."
-
-        if vehicle_type == "car":
-            if storm_risk:
-                return "Đi ô tô cần lái chậm, bật đèn, giữ khoảng cách vì mưa dông làm giảm tầm nhìn."
-            if rain_risk or strong_wind:
-                return "Đi ô tô nên chú ý tầm nhìn, đường ngập, kẹt xe và lái chậm khi mưa hoặc gió mạnh."
-            return "Đi ô tô khá an toàn, vẫn nên tính thêm thời gian nếu tuyến đường dễ kẹt xe."
-
-        if vehicle_type == "bicycle":
-            if storm_risk:
-                return "Đi xe đạp không nên di chuyển khi có dông hoặc gió mạnh, hãy cân nhắc phương tiện khác."
-            if rain_risk or strong_wind:
-                return "Đi xe đạp nên dùng áo mưa gọn, tránh đường trơn và rất cẩn thận khi gió mạnh."
-            return "Đi xe đạp thuận lợi nếu đường khô ráo, nên mang áo mưa gọn để dự phòng."
-
-        return "Hãy kiểm tra thời tiết sát giờ đi học để chọn phương tiện phù hợp."
+        return build_vehicle_commute_advice(
+            vehicle_type=vehicle_type,
+            rain_risk=rain_risk,
+            strong_wind=strong_wind,
+            hot_weather=hot_weather,
+            storm_risk=storm_risk,
+        )
 
     def _build_warnings(
         self,

@@ -20,7 +20,7 @@ import {
   formatOccurrenceRange,
   formatSemesterRange,
 } from "../../utils/classScheduleFormatters";
-import { formatMillimeters, formatPercent, formatWind } from "../../utils/formatters";
+import { formatMillimeters, formatPercent, formatWind, getVehicleIcon, getVehicleLabel } from "../../utils/formatters";
 import { RiskBadge } from "./RiskBadge";
 
 type WeeklyScheduleCardProps = {
@@ -30,6 +30,7 @@ type WeeklyScheduleCardProps = {
   onDelete: (schedule: WeeklyClassSchedule) => void;
   onEdit: (schedule: WeeklyClassSchedule) => void;
   onToggleActive: (schedule: WeeklyClassSchedule) => void;
+  onViewDetails: (forecast: ClassScheduleForecast | undefined, schedule: WeeklyClassSchedule) => void;
 };
 
 export function WeeklyScheduleCard({
@@ -39,6 +40,7 @@ export function WeeklyScheduleCard({
   onDelete,
   onEdit,
   onToggleActive,
+  onViewDetails,
 }: WeeklyScheduleCardProps) {
   const isForecastAvailable = forecast?.forecast_status === "available";
   const nextOccurrence = forecast?.next_occurrence;
@@ -87,6 +89,10 @@ export function WeeklyScheduleCard({
           <Bell size={16} aria-hidden="true" />
           Nhắc trước {schedule.notify_before_minutes} phút
         </span>
+        <span>
+          <span aria-hidden="true">{getVehicleIcon(schedule.vehicle_type)}</span>
+          {getVehicleLabel(schedule.vehicle_type)}
+        </span>
       </div>
 
       <div className="weekly-forecast-panel">
@@ -123,6 +129,16 @@ export function WeeklyScheduleCard({
         ) : null}
 
         <p>{forecast?.recommendation_message ?? getFallbackRecommendation(schedule)}</p>
+
+        <div className="weekly-advice-preview-row">
+          <div className="weekly-score-pill">
+            <strong>{forecast?.study_score ?? "--"}</strong>
+            <span>{forecast?.score_label ?? "Chờ dự báo"}</span>
+          </div>
+          <button type="button" className="weekly-detail-button" onClick={() => onViewDetails(forecast, schedule)}>
+            Xem chi tiết
+          </button>
+        </div>
       </div>
 
       <div className="weekly-card-footer">
