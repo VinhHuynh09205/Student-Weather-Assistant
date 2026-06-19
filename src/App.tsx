@@ -24,6 +24,7 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 import { AuthPage } from "./components/auth/AuthPage";
 import * as userApi from "./api/userApi";
 import * as weatherApi from "./api/weatherApi";
+import { trackPageView } from "./lib/analytics";
 import { appToastEventName, type AppToastPayload, type AppToastVariant } from "./utils/toast";
 
 
@@ -81,6 +82,10 @@ function AppContent() {
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
+
+  useEffect(() => {
+    trackPageView(`${window.location.pathname}${window.location.search}`);
+  }, [activeView]);
 
   const { settings, currentUser, updateSettings } = useAuth();
 
