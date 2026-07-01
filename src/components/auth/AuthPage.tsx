@@ -5,6 +5,7 @@ import { WeatherAuthBackground } from "./WeatherAuthBackground";
 import { LoginForm } from "./LoginForm";
 import { RegisterForm } from "./RegisterForm";
 import { SocialLoginButtons } from "./SocialLoginButtons";
+import { TwoFactorInput } from "./TwoFactorInput";
 
 interface AuthPageProps {
   onLoginSuccess: () => void;
@@ -17,7 +18,16 @@ export function AuthPage({ onLoginSuccess, onSkip }: AuthPageProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSyncPrompt, setShowSyncPrompt] = useState(false);
 
-  const { currentUser, login, register, loginGoogle, syncLocalData } = useAuth();
+  const {
+    currentUser,
+    login,
+    register,
+    loginGoogle,
+    syncLocalData,
+    requires2FA,
+    verify2FA,
+    cancel2FA,
+  } = useAuth();
 
   // Redirect if already logged in on mount
   useEffect(() => {
@@ -56,12 +66,34 @@ export function AuthPage({ onLoginSuccess, onSkip }: AuthPageProps) {
     setError("");
     setIsSubmitting(true);
     try {
-      await login(username, password, rememberMe);
+      const is2FA = await login(username, password, rememberMe);
+      if (is2FA) {
+        setIsSubmitting(false);
+        return;
+      }
       checkSyncRequirement();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Đăng nhập thất bại.");
       setIsSubmitting(false);
     }
+  };
+
+  const handleOTPVerify = async (code: string) => {
+    setError("");
+    setIsSubmitting(true);
+    try {
+      await verify2FA(code);
+      checkSyncRequirement();
+    } catch (err) {
+      setIsSubmitting(false);
+      throw err;
+    }
+  };
+
+  const handleOTPCancel = () => {
+    cancel2FA();
+    setError("");
+    setIsSubmitting(false);
   };
 
   const handleRegisterSubmit = async (username: string, password: string, fullName: string) => {
@@ -171,6 +203,14 @@ export function AuthPage({ onLoginSuccess, onSkip }: AuthPageProps) {
                     </button>
                   </div>
                 </div>
+              </div>
+            ) : requires2FA ? (
+              <div className="auth-card-scrollable-body">
+                <TwoFactorInput
+                  onVerify={handleOTPVerify}
+                  onCancel={handleOTPCancel}
+                  isLoading={isSubmitting}
+                />
               </div>
             ) : (
               <div className="auth-card-inner-flow">

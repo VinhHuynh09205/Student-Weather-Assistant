@@ -36,6 +36,8 @@ class User(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    totp_secret = Column(String, nullable=True)
+    is_2fa_enabled = Column(Boolean, default=False, nullable=False)
 
 
     # Relationships

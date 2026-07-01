@@ -9292,3 +9292,117 @@ body:has(.auth-fullscreen-layout) {
     font-size: 0.75rem;
   }
 }
+
+/* Two Factor Authentication (2FA) Styles */
+.two-factor-input-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 1.5rem 1rem;
+  width: 100%;
+}
+
+.two-factor-header-icon {
+  background: rgba(139, 116, 255, 0.15);
+  border-radius: 50%;
+  padding: 1rem;
+  margin-bottom: 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tfa-shield-icon {
+  color: #8b74ff;
+}
+
+.two-factor-title {
+  font-size: 1.6rem;
+  font-weight: 800;
+  margin-bottom: 0.75rem;
+  color: #ffffff;
+}
+
+.two-factor-description {
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.7);
+  margin-bottom: 2rem;
+  max-width: 32rem;
+}
+
+.otp-inputs-row {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+  margin-bottom: 2rem;
+  width: 100%;
+  max-width: 24rem;
+}
+
+.otp-digit-input {
+  width: 3rem;
+  height: 3.5rem;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 0.75rem;
+  color: #ffffff;
+  font-size: 1.75rem;
+  font-weight: 700;
+  text-align: center;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.otp-digit-input:focus {
+  border-color: #8b74ff;
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 0 0 3px rgba(139, 116, 255, 0.25);
+}
+
+.otp-actions-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+  margin-top: 1rem;
+}
+
+.btn-back-to-login {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition: color 0.2s ease;
+}
+
+.btn-back-to-login:hover {
+  color: #ffffff;
+}
+
+.otp-loading-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 0.9rem;
+}
+
+.security-2fa-panel {
+  margin-top: 1.5rem;
+}
+
+.tfa-panel-description {
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.68);
+  margin-bottom: 1.25rem;
+}
+

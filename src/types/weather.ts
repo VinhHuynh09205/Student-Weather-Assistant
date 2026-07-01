@@ -305,6 +305,7 @@ export interface User {
   avatar_url: string | null;
   auth_provider: string;
   is_active: boolean;
+  is_2fa_enabled: boolean;
   created_at: string;
   updated_at: string;
 }

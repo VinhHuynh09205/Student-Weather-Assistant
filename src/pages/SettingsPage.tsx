@@ -44,7 +44,109 @@ export function SettingsPage({ currentWeather, onOpenLogin, onOpenStudyAssistant
     removeLocation,
     setDefaultLoc,
     logout,
+    toggle2FAState,
   } = useAuth();
+
+  // 2FA Setup states
+  const [tfaLoading, setTfaLoading] = useState(false);
+  const [tfaError, setTfaError] = useState("");
+  const [tfaSuccess, setTfaSuccess] = useState("");
+  const [showTfaSetup, setShowTfaSetup] = useState(false);
+  const [qrCode, setQrCode] = useState("");
+  const [manualKey, setManualKey] = useState("");
+  const [otpCode, setOtpCode] = useState("");
+  const [showDisableTfa, setShowDisableTfa] = useState(false);
+
+  const handleSetup2FA = async () => {
+    setTfaLoading(true);
+    setTfaError("");
+    setTfaSuccess("");
+    try {
+      const token = window.localStorage.getItem("student_weather_token") || window.sessionStorage.getItem("student_weather_token");
+      const resp = await fetch(`${import.meta.env.VITE_API_BASE_URL ?? "http://sw-alb-v7-1940911359.ap-southeast-1.elb.amazonaws.com"}/api/v1/auth/2fa/setup`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (!resp.ok) {
+        const err = await resp.json();
+        throw new Error(err.detail || "Không thể khởi tạo thiết lập 2FA.");
+      }
+      const data = await resp.json();
+      setQrCode(data.qr_code_base64);
+      setManualKey(data.manual_key);
+      setShowTfaSetup(true);
+    } catch (err) {
+      setTfaError(err instanceof Error ? err.message : "Đã xảy ra lỗi.");
+    } finally {
+      setTfaLoading(false);
+    }
+  };
+
+  const handleConfirm2FA = async () => {
+    if (!otpCode || otpCode.length !== 6) {
+      setTfaError("Vui lòng nhập đúng 6 chữ số.");
+      return;
+    }
+    setTfaLoading(true);
+    setTfaError("");
+    try {
+      const token = window.localStorage.getItem("student_weather_token") || window.sessionStorage.getItem("student_weather_token");
+      const resp = await fetch(`${import.meta.env.VITE_API_BASE_URL ?? "http://sw-alb-v7-1940911359.ap-southeast-1.elb.amazonaws.com"}/api/v1/auth/2fa/enable`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ code: otpCode }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json();
+        throw new Error(err.detail || "Mã OTP không chính xác.");
+      }
+      toggle2FAState(true);
+      setTfaSuccess("Kích hoạt xác thực 2 yếu tố (2FA) thành công!");
+      setShowTfaSetup(false);
+      setOtpCode("");
+    } catch (err) {
+      setTfaError(err instanceof Error ? err.message : "Đã xảy ra lỗi.");
+    } finally {
+      setTfaLoading(false);
+    }
+  };
+
+  const handleDisable2FA = async () => {
+    if (!otpCode || otpCode.length !== 6) {
+      setTfaError("Vui lòng nhập đúng 6 chữ số.");
+      return;
+    }
+    setTfaLoading(true);
+    setTfaError("");
+    try {
+      const token = window.localStorage.getItem("student_weather_token") || window.sessionStorage.getItem("student_weather_token");
+      const resp = await fetch(`${import.meta.env.VITE_API_BASE_URL ?? "http://sw-alb-v7-1940911359.ap-southeast-1.elb.amazonaws.com"}/api/v1/auth/2fa/disable`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ code: otpCode }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json();
+        throw new Error(err.detail || "Mã OTP không chính xác.");
+      }
+      toggle2FAState(false);
+      setTfaSuccess("Đã tắt xác thực 2 yếu tố (2FA) thành công.");
+      setShowDisableTfa(false);
+      setOtpCode("");
+    } catch (err) {
+      setTfaError(err instanceof Error ? err.message : "Đã xảy ra lỗi.");
+    } finally {
+      setTfaLoading(false);
+    }
+  };
 
   // Notification states
   const [notificationSuccessMsg, setNotificationSuccessMsg] = useState("");
@@ -424,25 +526,163 @@ export function SettingsPage({ currentWeather, onOpenLogin, onOpenStudyAssistant
           </button>
         </div>
       ) : (
-        <div className="glass-card settings-account-panel">
-          <h2>Tài khoản sinh viên</h2>
-          <div className="settings-account-info">
-            <img
-              src={currentUser.avatar_url || "https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&f=y"}
-              alt="Avatar"
-              className="user-profile-avatar"
-            />
-            <div className="user-profile-info">
-              <span className="user-profile-name">{currentUser.full_name || "Sinh viên"}</span>
-              <span className="user-profile-email">
-                {currentUser.auth_provider === "local" ? currentUser.username : (currentUser.email || "Google Account")}
-              </span>
+        <>
+          <div className="glass-card settings-account-panel">
+            <h2>Tài khoản sinh viên</h2>
+            <div className="settings-account-info">
+              <img
+                src={currentUser.avatar_url || "https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&f=y"}
+                alt="Avatar"
+                className="user-profile-avatar"
+              />
+              <div className="user-profile-info">
+                <span className="user-profile-name">{currentUser.full_name || "Sinh viên"}</span>
+                <span className="user-profile-email">
+                  {currentUser.auth_provider === "local" ? currentUser.username : (currentUser.email || "Google Account")}
+                </span>
+              </div>
+              <button type="button" className="btn-secondary settings-logout-btn" onClick={handleLogout}>
+                Đăng xuất
+              </button>
             </div>
-            <button type="button" className="btn-secondary settings-logout-btn" onClick={handleLogout}>
-              Đăng xuất
-            </button>
           </div>
-        </div>
+
+          <div className="glass-card settings-account-panel security-2fa-panel">
+            <h2>🔐 Bảo mật nâng cao (2FA)</h2>
+            <p className="tfa-panel-description">
+              Xác thực 2 yếu tố (2FA) bổ sung thêm một lớp bảo mật cho tài khoản của bạn bằng cách yêu cầu mã OTP từ ứng dụng Google Authenticator mỗi khi đăng nhập.
+            </p>
+            
+            {tfaError && <div className="auth-error-banner" style={{ margin: "10px 0" }}>{tfaError}</div>}
+            {tfaSuccess && <div className="auth-success-banner" style={{ margin: "10px 0", color: "#4caf50", background: "rgba(76, 175, 80, 0.1)", padding: "10px", borderRadius: "8px" }}>{tfaSuccess}</div>}
+
+            <div className="tfa-status-control">
+              {currentUser.is_2fa_enabled ? (
+                <div className="tfa-status-active">
+                  <div className="tfa-status-badge active" style={{ display: "inline-flex", alignItems: "center", gap: "6px", background: "rgba(76, 175, 80, 0.1)", color: "#4caf50", padding: "4px 8px", borderRadius: "4px", fontWeight: "bold", fontSize: "0.85rem", marginBottom: "10px" }}>
+                    <span className="badge-dot" style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#4caf50" }}></span> ĐANG BẬT
+                  </div>
+                  <p style={{ marginBottom: "15px", fontSize: "0.95rem" }}>Tài khoản của bạn đang được bảo vệ bằng xác thực 2 lớp.</p>
+                  
+                  {!showDisableTfa ? (
+                    <button
+                      type="button"
+                      className="settings-logout-btn"
+                      style={{ background: "rgba(244, 67, 54, 0.1)", color: "#f44336", border: "1px solid rgba(244, 67, 54, 0.2)" }}
+                      onClick={() => {
+                        setShowDisableTfa(true);
+                        setTfaError("");
+                        setTfaSuccess("");
+                        setOtpCode("");
+                      }}
+                      disabled={tfaLoading}
+                    >
+                      Tắt bảo mật 2FA
+                    </button>
+                  ) : (
+                    <div className="tfa-setup-flow" style={{ marginTop: "15px", padding: "15px", borderRadius: "8px", background: "rgba(255,255,255,0.05)" }}>
+                      <p className="tfa-setup-instructions" style={{ marginBottom: "10px", fontSize: "0.9rem" }}>Nhập mã OTP 6 số từ Google Authenticator để xác nhận tắt 2FA:</p>
+                      <input
+                        type="text"
+                        maxLength={6}
+                        placeholder="Mã OTP 6 số"
+                        value={otpCode}
+                        onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ""))}
+                        style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "6px", padding: "8px 12px", width: "100%", maxWidth: "200px", color: "#fff", fontSize: "1.1rem", textAlign: "center", letterSpacing: "2px", marginBottom: "12px", display: "block" }}
+                        disabled={tfaLoading}
+                      />
+                      <div className="tfa-setup-buttons" style={{ display: "flex", gap: "10px" }}>
+                        <button
+                          type="button"
+                          className="btn-primary"
+                          style={{ background: "#f44336" }}
+                          onClick={handleDisable2FA}
+                          disabled={tfaLoading}
+                        >
+                          {tfaLoading ? "Đang xử lý..." : "Xác nhận tắt"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => {
+                            setShowDisableTfa(false);
+                            setOtpCode("");
+                            setTfaError("");
+                          }}
+                          disabled={tfaLoading}
+                        >
+                          Hủy
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="tfa-status-inactive">
+                  <div className="tfa-status-badge inactive" style={{ display: "inline-flex", alignItems: "center", gap: "6px", background: "rgba(255,255,255,0.08)", color: "#888", padding: "4px 8px", borderRadius: "4px", fontWeight: "bold", fontSize: "0.85rem", marginBottom: "10px" }}>
+                    <span className="badge-dot" style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#888" }}></span> ĐANG TẮT
+                  </div>
+                  <p style={{ marginBottom: "15px", fontSize: "0.95rem" }}>Bật 2FA để bảo vệ tài khoản tốt hơn chống lại các nỗ lực đăng nhập trái phép.</p>
+
+                  {!showTfaSetup ? (
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={handleSetup2FA}
+                      disabled={tfaLoading}
+                    >
+                      {tfaLoading ? "Đang khởi tạo..." : "Thiết lập bảo mật 2FA"}
+                    </button>
+                  ) : (
+                    <div className="tfa-setup-flow" style={{ marginTop: "15px", padding: "15px", borderRadius: "8px", background: "rgba(255,255,255,0.05)" }}>
+                      <div className="tfa-setup-steps">
+                        <p className="tfa-step" style={{ fontSize: "0.9rem", marginBottom: "8px" }}><strong>Bước 1:</strong> Quét mã QR dưới đây bằng ứng dụng Google Authenticator:</p>
+                        <div className="tfa-qr-code-wrapper" style={{ background: "#fff", padding: "10px", borderRadius: "8px", display: "inline-block", marginBottom: "10px" }}>
+                          <img src={qrCode} alt="QR Code 2FA" className="tfa-qr-image" style={{ width: "160px", height: "160px", display: "block" }} />
+                        </div>
+                        <p className="tfa-step-manual" style={{ fontSize: "0.85rem", color: "#aaa", marginBottom: "15px" }}>
+                          Nếu không quét được mã, hãy nhập khóa này thủ công: <code style={{ color: "#fff", background: "rgba(0,0,0,0.2)", padding: "2px 6px", borderRadius: "4px", fontSize: "0.9rem" }}>{manualKey}</code>
+                        </p>
+                        <p className="tfa-step" style={{ fontSize: "0.9rem", marginBottom: "8px" }}><strong>Bước 2:</strong> Nhập mã OTP gồm 6 chữ số từ ứng dụng để xác nhận:</p>
+                        <input
+                          type="text"
+                          maxLength={6}
+                          placeholder="Mã OTP 6 số"
+                          value={otpCode}
+                          onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ""))}
+                          style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "6px", padding: "8px 12px", width: "100%", maxWidth: "200px", color: "#fff", fontSize: "1.1rem", textAlign: "center", letterSpacing: "2px", marginBottom: "12px", display: "block" }}
+                          disabled={tfaLoading}
+                        />
+                      </div>
+                      <div className="tfa-setup-buttons" style={{ display: "flex", gap: "10px" }}>
+                        <button
+                          type="button"
+                          className="btn-primary"
+                          onClick={handleConfirm2FA}
+                          disabled={tfaLoading}
+                        >
+                          {tfaLoading ? "Đang kích hoạt..." : "Kích hoạt 2FA"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => {
+                            setShowTfaSetup(false);
+                            setOtpCode("");
+                            setTfaError("");
+                          }}
+                          disabled={tfaLoading}
+                        >
+                          Hủy
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </>
       )}
 
       {/* 1. General App Settings */}

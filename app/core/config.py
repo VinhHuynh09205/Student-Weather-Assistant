@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     )
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     access_token_expire_minutes: int = Field(default=60, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
+    totp_encryption_key: str = Field(
+        default="Jnsk-Z86lg01R7BVVeHyeZG9PnXu1Ytql8SLVhRez3U=",
+        alias="TOTP_ENCRYPTION_KEY"
+    )
 
     # Google OAuth
     google_client_id: str | None = Field(default=None, alias="GOOGLE_CLIENT_ID")

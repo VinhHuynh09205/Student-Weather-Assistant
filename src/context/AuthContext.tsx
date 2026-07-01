@@ -57,11 +57,16 @@ interface AuthContextType {
   editSchedule: (id: string, sched: Partial<StudyScheduleResponse>) => Promise<void>;
   removeSchedule: (id: string) => Promise<void>;
 
-  login: (username: string, password: string, rememberLogin?: boolean) => Promise<void>;
+  login: (username: string, password: string, rememberLogin?: boolean) => Promise<boolean>;
   register: (username: string, password: string, confirmPassword: string, fullName: string) => Promise<void>;
   loginGoogle: (idToken: string) => Promise<void>;
   logout: () => void;
   syncLocalData: () => Promise<void>;
+  requires2FA: boolean;
+  tempToken: string | null;
+  verify2FA: (code: string) => Promise<void>;
+  cancel2FA: () => void;
+  toggle2FAState: (enabled: boolean) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -85,6 +90,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     getStoredAuthToken()
   );
   const [isLoading, setIsLoading] = useState(true);
+  const [requires2FA, setRequires2FA] = useState(false);
+  const [tempToken, setTempToken] = useState<string | null>(null);
+  const [remember2FA, setRemember2FA] = useState(false);
 
   // User Data States
   const [settings, setSettings] = useState<UserSettingsResponse>(() => {
@@ -263,9 +271,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error(err.detail || "Đăng nhập thất bại.");
     }
     const data = await resp.json();
+    if (data.requires_2fa) {
+      setRequires2FA(true);
+      setTempToken(data.temp_token);
+      setRemember2FA(rememberLogin);
+      return true;
+    }
     storeAuthToken(data.access_token, rememberLogin);
     setAccessToken(data.access_token);
     await fetchCurrentUser(data.access_token);
+    return false;
+  };
+
+  const verify2FA = async (code: string) => {
+    if (!tempToken) {
+      throw new Error("Không tìm thấy mã xác thực tạm thời.");
+    }
+    const resp = await fetch(`${API_BASE_URL}/api/v1/auth/2fa/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ temp_token: tempToken, code }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(err.detail || "Mã OTP không chính xác.");
+    }
+    const data = await resp.json();
+    storeAuthToken(data.access_token, remember2FA);
+    setAccessToken(data.access_token);
+    setRequires2FA(false);
+    setTempToken(null);
+    setRemember2FA(false);
+    await fetchCurrentUser(data.access_token);
+  };
+
+  const cancel2FA = () => {
+    setRequires2FA(false);
+    setTempToken(null);
+    setRemember2FA(false);
+  };
+
+  const toggle2FAState = (enabled: boolean) => {
+    if (currentUser) {
+      setCurrentUser({ ...currentUser, is_2fa_enabled: enabled });
+    }
   };
 
   const register = async (username: string, password: string, confirmPassword: string, fullName: string) => {
@@ -301,6 +350,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     clearStoredAuthToken();
     setAccessToken(null);
     setCurrentUser(null);
+    setRequires2FA(false);
+    setTempToken(null);
+    setRemember2FA(false);
     
     // Reset to local guest data
     const localSettings = localStorage.getItem("student_weather_settings");
@@ -635,6 +687,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loginGoogle,
         logout,
         syncLocalData,
+        requires2FA,
+        tempToken,
+        verify2FA,
+        cancel2FA,
+        toggle2FAState,
       }}
     >
       {children}

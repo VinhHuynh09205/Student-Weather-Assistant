@@ -8,9 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_current_user
 from app.core.config import get_settings
+from app.core.limiter import limiter
 from app.db.models import User, UserSettings
 from app.db.session import get_db
 from app.schemas.user import Token, UserCreate, UserLogin, UserResponse
+from app.services.totp_service import TOTPService
 from app.utils.security import (
     create_access_token,
     create_long_lived_access_token,
@@ -20,6 +22,7 @@ from app.utils.security import (
 )
 
 settings = get_settings()
+totp_service = TOTPService()
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
@@ -71,7 +74,8 @@ async def register(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/login", response_model=Token)
-async def login(credentials: UserLogin, db: AsyncSession = Depends(get_db)):
+@limiter.limit("5/minute")
+async def login(request: Request, credentials: UserLogin, db: AsyncSession = Depends(get_db)):
     normalized_username = credentials.username.lower()
     result = await db.execute(select(User).where(User.normalized_username == normalized_username))
     user = result.scalars().first()
@@ -86,6 +90,15 @@ async def login(credentials: UserLogin, db: AsyncSession = Depends(get_db)):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Tài khoản đã bị vô hiệu hóa.",
+        )
+
+    if user.is_2fa_enabled:
+        temp_token = totp_service.generate_temp_token(user.id, remember_me=credentials.remember_me)
+        return Token(
+            access_token="",
+            token_type="bearer",
+            requires_2fa=True,
+            temp_token=temp_token
         )
 
     if credentials.remember_me:

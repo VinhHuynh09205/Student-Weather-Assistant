@@ -44,6 +44,7 @@ class UserResponse(UserBase):
     id: UUID
     auth_provider: str
     is_active: bool
+    is_2fa_enabled: bool
     created_at: datetime
     updated_at: datetime
 
@@ -54,7 +55,23 @@ class UserResponse(UserBase):
 class Token(BaseModel):
     access_token: str
     token_type: str
+    requires_2fa: bool = False
+    temp_token: str | None = None
 
 
 class TokenData(BaseModel):
     user_id: UUID | None = None
+
+
+class TwoFactorSetupResponse(BaseModel):
+    qr_code_base64: str
+    manual_key: str
+
+
+class TwoFactorVerifyRequest(BaseModel):
+    code: str = Field(..., min_length=6, max_length=6)
+
+
+class TwoFactorLoginRequest(BaseModel):
+    temp_token: str
+    code: str = Field(..., min_length=6, max_length=6)
