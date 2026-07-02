@@ -26,7 +26,7 @@ class TOTPService:
         return self.fernet.decrypt(encrypted_secret.encode()).decode()
 
     def generate_qr_code_base64(self, secret: str, username: str) -> str:
-        totp = pyotp.TOTP(secret, issuer_name="Student Weather Assistant")
+        totp = pyotp.TOTP(secret)
         provisioning_url = totp.provisioning_uri(name=username, issuer_name="Student Weather Assistant")
 
         qr = qrcode.QRCode(version=1, box_size=10, border=5)

@@ -50,9 +50,9 @@ export function initGoogleAnalytics(): void {
   window.dataLayer = window.dataLayer ?? [];
   window.gtag =
     window.gtag ??
-    ((...args: unknown[]) => {
-      window.dataLayer?.push(args);
-    });
+    function (..._args: unknown[]) {
+      window.dataLayer?.push(arguments);
+    };
 
   if (!document.getElementById(GA_SCRIPT_ID)) {
     console.log("[GA4] Injecting script tag for measurement ID:", measurementId);
