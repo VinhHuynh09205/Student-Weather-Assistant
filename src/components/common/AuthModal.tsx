@@ -88,9 +88,12 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
     setError("");
     setIsSubmitting(true);
     try {
-      // Direct post mock id token to verify OAuth login
       const mockToken = "mock_google_id_token";
-      await loginGoogle(mockToken);
+      const is2FA = await loginGoogle(mockToken);
+      if (is2FA) {
+        onClose();
+        return;
+      }
       
       const localLoc = localStorage.getItem("student_weather_confirmed_location");
       const localSched = localStorage.getItem("student_weather_study_schedule");

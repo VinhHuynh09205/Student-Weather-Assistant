@@ -112,7 +112,11 @@ export function AuthPage({ onLoginSuccess, onSkip }: AuthPageProps) {
     setError("");
     setIsSubmitting(true);
     try {
-      await loginGoogle(idToken);
+      const is2FA = await loginGoogle(idToken);
+      if (is2FA) {
+        setIsSubmitting(false);
+        return;
+      }
       checkSyncRequirement();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Xác thực Google thất bại.");

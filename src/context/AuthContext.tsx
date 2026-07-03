@@ -59,7 +59,7 @@ interface AuthContextType {
 
   login: (username: string, password: string, rememberLogin?: boolean) => Promise<boolean>;
   register: (username: string, password: string, confirmPassword: string, fullName: string) => Promise<void>;
-  loginGoogle: (idToken: string) => Promise<void>;
+  loginGoogle: (idToken: string) => Promise<boolean>;
   logout: () => void;
   syncLocalData: () => Promise<void>;
   requires2FA: boolean;
@@ -341,9 +341,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error(err.detail || "Xác thực Google thất bại.");
     }
     const data = await resp.json();
+    if (data.requires_2fa) {
+      setRequires2FA(true);
+      setTempToken(data.temp_token);
+      setRemember2FA(true);
+      return true;
+    }
     storeAuthToken(data.access_token, true);
     setAccessToken(data.access_token);
     await fetchCurrentUser(data.access_token);
+    return false;
   };
 
   const logout = () => {

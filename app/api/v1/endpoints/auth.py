@@ -212,6 +212,15 @@ async def google_token_login(req: GoogleTokenRequest, db: AsyncSession = Depends
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tài khoản đã bị vô hiệu hóa.")
 
+    if user.is_2fa_enabled:
+        temp_token = totp_service.generate_temp_token(user.id, remember_me=True)
+        return Token(
+            access_token="",
+            token_type="bearer",
+            requires_2fa=True,
+            temp_token=temp_token
+        )
+
     # Google users get a long-lived token (7 days) for persistent login
     access_token = create_long_lived_access_token(subject=user.id, days=7, extra_claims={"remember": True})
     return Token(access_token=access_token, token_type="bearer")
